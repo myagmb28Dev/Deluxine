@@ -1,0 +1,123 @@
+# =========================
+# Node / NestJS
+# =========================
+node_modules/
+dist/
+build/
+coverage/
+.nyc_output/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Runtime / process
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# =========================
+# Environment / secrets
+# =========================
+.env
+
+# Keys / certificates / credentials
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.kdbx
+*.asc
+*.gpg
+*.ovpn
+*.kubeconfig
+
+# Service account / cloud secrets
+*service-account*.json
+*credentials*.json
+secrets/
+secret/
+
+# =========================
+# Databases / caches / temp
+# =========================
+*.sqlite
+*.sqlite3
+*.db
+*.rdb
+*.aof
+*.tmp
+*.temp
+*.swp
+*.swo
+
+# File uploads / generated assets
+/uploads/
+uploads/
+storage/
+public/uploads/
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.gif
+
+# Keep documentation/static examples if needed
+!README.md
+
+# =========================
+# Package manager / lock-state caches
+# =========================
+.pnpm-store/
+.npm/
+.yarn/
+.yarn/cache/
+.yarn/unplugged/
+.yarn/build-state.yml
+.yarn/install-state.gz
+
+# =========================
+# IDE / OS
+# =========================
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.iml
+
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# =========================
+# Test artifacts
+# =========================
+junit.xml
+test-results/
+playwright-report/
+
+# =========================
+# Terraform / infra
+# =========================
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.lock.hcl
+
+# =========================
+# Misc
+# =========================
+.gemini/
+.cache/
+.eslintcache
+.prettiercache
