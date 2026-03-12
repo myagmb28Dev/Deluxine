@@ -1,5 +1,6 @@
 import { Body, Controller, Get, NotFoundException, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiTags, ApiBearerAuth } from '@nestjs/swagger';
+import { SkipThrottle } from '@nestjs/throttler';
 import { SessionService } from '../session/session.service';
 import { UpdatePoseDto } from './dto/update-pose.dto';
 import { PoseService } from './pose.service';
@@ -32,21 +33,41 @@ export class PoseController {
   @ApiOperation({ summary: '포즈 생성 작업 상태 조회 (Polling 용도)' })
   async getStatus(@Param('sessionId') sessionId: string) {
     const status = await this.poseService.getPoseGenerationStatus(sessionId);
+    const progress = await this.poseService.getPoseProgress(sessionId);
+
     if (!status) {
       // Redis 캐시에 없으면 DB에 포즈가 있는지 확인
       const pose = await this.poseService.findBySessionId(sessionId);
       if (pose) {
-        return { status: 'completed', pose_id: pose.id };
+        return { status: 'completed', pose_id: pose.id, progress: 100, phase: 'editing' };
       }
       throw new NotFoundException('Pose generation status not found or not started');
     }
 
     // 상태가 완료된 경우(id 반환 시)
     if (status !== 'pending' && status !== 'generating' && status !== 'failed') {
-      return { status: 'completed', pose_id: status };
+      return { status: 'completed', pose_id: status, progress: 100, phase: 'editing' };
     }
 
-    return { status };
+    // 진행 중: progress 포함
+    const progressValue = progress ?? (status === 'generating' ? 20 : 0);
+    if (status === 'failed') {
+      return { status, progress: progressValue, phase: 'failed' };
+    }
+
+    return { status, progress: progressValue, phase: 'processing' };
+  }
+
+  @Get('guide')
+  @ApiOperation({ summary: '관절 라벨/색상/연결 가이드 조회 (UI Legend 용도)' })
+  async getGuide() {
+    return this.poseService.getGuide();
+  }
+
+  @Get('topology')
+  @ApiOperation({ summary: '포즈 스켈레톤 topology 조회' })
+  async getTopology() {
+    return this.poseService.getTopology();
   }
 
   @Get()
@@ -57,10 +78,14 @@ export class PoseController {
       throw new NotFoundException('pose not found');
     }
 
-    return pose;
+    return {
+      ...pose,
+      coordinateMode: 'normalized',
+    };
   }
 
   @Patch()
+  @SkipThrottle()
   @ApiOperation({ summary: '포즈 키포인트 수정' })
   async update(@Param('sessionId') sessionId: string, @Body() dto: UpdatePoseDto) {
     const session = await this.sessionService.findById(sessionId);

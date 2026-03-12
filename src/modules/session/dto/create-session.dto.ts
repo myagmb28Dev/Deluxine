@@ -1,9 +1,18 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class CreateSessionDto {
   @ApiPropertyOptional({ example: 'line.png' })
   @IsOptional()
   @IsString()
   lineArt?: string;
+
+  @ApiPropertyOptional({ example: '무릎 포즈 실험 #1' })
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(255)
+  title?: string;
 }

@@ -14,9 +14,16 @@ import { JwtStrategy } from './strategies/jwt.strategy';
     PassportModule.register({ session: false }),
     JwtModule.registerAsync({
       inject: [ConfigService],
-      useFactory: (configService: ConfigService) => ({
-        secret: configService.get<string>('auth.jwtSecret') ?? 'dev-secret',
-      }),
+      useFactory: (configService: ConfigService) => {
+        const secret = configService.get<string>('auth.jwtSecret')?.trim();
+        if (!secret) {
+          throw new Error('JWT_SECRET is required and must not be empty');
+        }
+
+        return {
+          secret,
+        };
+      },
     }),
     TypeOrmModule.forFeature([User]),
   ],

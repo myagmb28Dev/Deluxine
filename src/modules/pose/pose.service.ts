@@ -14,6 +14,13 @@ export interface PoseModel {
   keypoints: Array<{ name: string; x: number; y: number }>;
 }
 
+type JointGuideItem = {
+  name: string;
+  label: string;
+  group: 'head' | 'torso' | 'left_arm' | 'right_arm' | 'left_leg' | 'right_leg' | 'left_hand' | 'right_hand' | 'left_foot' | 'right_foot';
+  color: string;
+};
+
 @Injectable()
 export class PoseService {
   private readonly logger = new Logger(PoseService.name);
@@ -100,6 +107,11 @@ export class PoseService {
     return this.redisService.get<string>(RedisKeys.sessionCurrentPose(sessionId));
   }
 
+  async getPoseProgress(sessionId: string): Promise<number | null> {
+    const progress = await this.redisService.get<number>(RedisKeys.poseProgress(sessionId));
+    return progress ?? null;
+  }
+
   async getTempKeypoints(sessionId: string) {
     return this.redisService.get<Array<{ name: string; x: number; y: number }>>(
       RedisKeys.tempPoseKeypoints(sessionId),
@@ -124,5 +136,113 @@ export class PoseService {
     await this.redisService.del(RedisKeys.poseCache(sessionId));
     await this.redisService.del(RedisKeys.sessionCurrentPose(sessionId));
     await this.redisService.del(RedisKeys.tempPoseKeypoints(sessionId));
+  }
+
+  getGuide() {
+    const joints: JointGuideItem[] = [
+      { name: 'head', label: '머리', group: 'head', color: '#A855F7' },
+      { name: 'neck', label: '목', group: 'head', color: '#A855F7' },
+      { name: 'chest', label: '가슴', group: 'torso', color: '#10B981' },
+      { name: 'abdomen', label: '복부', group: 'torso', color: '#10B981' },
+      { name: 'spine', label: '척추 중앙', group: 'torso', color: '#10B981' },
+      { name: 'pelvis', label: '골반 중심', group: 'torso', color: '#10B981' },
+
+      { name: 'left_shoulder', label: '왼쪽 어깨', group: 'left_arm', color: '#EF4444' },
+      { name: 'left_elbow', label: '왼쪽 팔꿈치', group: 'left_arm', color: '#EF4444' },
+      { name: 'left_wrist', label: '왼쪽 손목', group: 'left_arm', color: '#EF4444' },
+      { name: 'left_thumb', label: '왼쪽 엄지', group: 'left_hand', color: '#F97316' },
+      { name: 'left_index', label: '왼쪽 검지', group: 'left_hand', color: '#F97316' },
+      { name: 'left_middle', label: '왼쪽 중지', group: 'left_hand', color: '#F97316' },
+      { name: 'left_ring', label: '왼쪽 약지', group: 'left_hand', color: '#F97316' },
+      { name: 'left_pinky', label: '왼쪽 새끼손가락', group: 'left_hand', color: '#F97316' },
+
+      { name: 'right_shoulder', label: '오른쪽 어깨', group: 'right_arm', color: '#F43F5E' },
+      { name: 'right_elbow', label: '오른쪽 팔꿈치', group: 'right_arm', color: '#F43F5E' },
+      { name: 'right_wrist', label: '오른쪽 손목', group: 'right_arm', color: '#F43F5E' },
+      { name: 'right_thumb', label: '오른쪽 엄지', group: 'right_hand', color: '#FB7185' },
+      { name: 'right_index', label: '오른쪽 검지', group: 'right_hand', color: '#FB7185' },
+      { name: 'right_middle', label: '오른쪽 중지', group: 'right_hand', color: '#FB7185' },
+      { name: 'right_ring', label: '오른쪽 약지', group: 'right_hand', color: '#FB7185' },
+      { name: 'right_pinky', label: '오른쪽 새끼손가락', group: 'right_hand', color: '#FB7185' },
+
+      { name: 'left_hip', label: '왼쪽 골반', group: 'left_leg', color: '#3B82F6' },
+      { name: 'left_knee', label: '왼쪽 무릎', group: 'left_leg', color: '#3B82F6' },
+      { name: 'left_ankle', label: '왼쪽 발목', group: 'left_leg', color: '#3B82F6' },
+      { name: 'left_foot', label: '왼쪽 발끝', group: 'left_leg', color: '#3B82F6' },
+      { name: 'left_toe', label: '왼쪽 발가락', group: 'left_foot', color: '#06B6D4' },
+
+      { name: 'right_hip', label: '오른쪽 골반', group: 'right_leg', color: '#2563EB' },
+      { name: 'right_knee', label: '오른쪽 무릎', group: 'right_leg', color: '#2563EB' },
+      { name: 'right_ankle', label: '오른쪽 발목', group: 'right_leg', color: '#2563EB' },
+      { name: 'right_foot', label: '오른쪽 발끝', group: 'right_leg', color: '#2563EB' },
+      { name: 'right_toe', label: '오른쪽 발가락', group: 'right_foot', color: '#0891B2' },
+    ];
+
+    return {
+      version: '1.0',
+      groups: {
+        head: { label: '머리/목', color: '#A855F7' },
+        torso: { label: '몸통', color: '#10B981' },
+        left_arm: { label: '왼팔', color: '#EF4444' },
+        right_arm: { label: '오른팔', color: '#F43F5E' },
+        left_hand: { label: '왼손(상세)', color: '#F97316' },
+        right_hand: { label: '오른손(상세)', color: '#FB7185' },
+        left_leg: { label: '왼다리', color: '#3B82F6' },
+        right_leg: { label: '오른다리', color: '#2563EB' },
+        left_foot: { label: '왼발(상세)', color: '#06B6D4' },
+        right_foot: { label: '오른발(상세)', color: '#0891B2' },
+      },
+      joints,
+      recommendedUi: {
+        defaultMode: 'core_only',
+        advancedToggle: {
+          hand: ['left_thumb', 'left_index', 'left_middle', 'left_ring', 'left_pinky', 'right_thumb', 'right_index', 'right_middle', 'right_ring', 'right_pinky'],
+          foot: ['left_toe', 'right_toe'],
+        },
+      },
+    };
+  }
+
+  getTopology() {
+    return {
+      edges: [
+        ['head', 'neck'],
+        ['neck', 'chest'],
+        ['chest', 'abdomen'],
+        ['abdomen', 'spine'],
+        ['spine', 'pelvis'],
+        ['neck', 'left_shoulder'],
+        ['left_shoulder', 'left_elbow'],
+        ['left_elbow', 'left_wrist'],
+        ['neck', 'right_shoulder'],
+        ['right_shoulder', 'right_elbow'],
+        ['right_elbow', 'right_wrist'],
+        ['pelvis', 'left_hip'],
+        ['left_hip', 'left_knee'],
+        ['left_knee', 'left_ankle'],
+        ['left_ankle', 'left_foot'],
+        ['pelvis', 'right_hip'],
+        ['right_hip', 'right_knee'],
+        ['right_knee', 'right_ankle'],
+        ['right_ankle', 'right_foot'],
+      ],
+      left_right_pairs: [
+        ['left_shoulder', 'right_shoulder'],
+        ['left_elbow', 'right_elbow'],
+        ['left_wrist', 'right_wrist'],
+        ['left_hip', 'right_hip'],
+        ['left_knee', 'right_knee'],
+        ['left_ankle', 'right_ankle'],
+        ['left_foot', 'right_foot'],
+      ],
+      groups: {
+        head: ['head', 'neck'],
+        face: [],
+        torso: ['chest', 'abdomen', 'spine', 'pelvis'],
+        arm: ['left_shoulder', 'left_elbow', 'left_wrist', 'right_shoulder', 'right_elbow', 'right_wrist'],
+        hand: ['left_thumb', 'left_index', 'left_middle', 'left_ring', 'left_pinky', 'right_thumb', 'right_index', 'right_middle', 'right_ring', 'right_pinky'],
+        leg: ['left_hip', 'left_knee', 'left_ankle', 'left_foot', 'right_hip', 'right_knee', 'right_ankle', 'right_foot'],
+      },
+    };
   }
 }

@@ -28,6 +28,12 @@ async function bootstrap() {
     .setTitle('Deluxine API')
     .setDescription('선화-포즈-렌더 파이프라인 API')
     .setVersion('1.0.0')
+    .addBearerAuth({
+      type: 'http',
+      scheme: 'bearer',
+      bearerFormat: 'JWT',
+      description: 'JWT 토큰 (Authorization: Bearer <token>)',
+    }, 'access-token')
     .build();
 
   const document = SwaggerModule.createDocument(app, swaggerConfig);

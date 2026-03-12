@@ -22,13 +22,19 @@ export class AuthController {
   @Get('google/callback')
   @UseGuards(GoogleOAuthGuard)
   @ApiOperation({ summary: 'Google 로그인 콜백 및 토큰/프로필 저장' })
-  async googleCallback(@Req() req: { user: GoogleAuthUser }) {
+  async googleCallback(@Req() req: any) {
     const result = await this.authService.handleGoogleLogin(req.user);
+    const feCallbackUrl = req.user.feCallbackUrl || 'http://localhost:5173/auth/callback';
 
-    return {
-      message: 'google login success',
-      ...result,
-    };
+    // FE로 리다이렉트 (쿼리 파라미터로 토큰 전달)
+    const params = new URLSearchParams({
+      access_token: result.app_tokens.access_token,
+      refresh_token: result.app_tokens.refresh_token,
+      user_id: result.user_id,
+      email: result.email,
+    });
+
+    return req.res.redirect(`${feCallbackUrl}?${params.toString()}`);
   }
 
   @Get('users/:userId/storage-status')

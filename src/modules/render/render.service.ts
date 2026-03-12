@@ -12,6 +12,10 @@ export class RenderService {
   private readonly logger = new Logger(RenderService.name);
   private readonly STATUS_TTL = 7200; // 2시간
 
+  private getRenderPublicDirectory(userId: string, sessionId: string) {
+    return `/uploads/users/${userId}/sessions/${sessionId}/renders`;
+  }
+
   constructor(
     @InjectRepository(RenderJob)
     private readonly renderJobRepository: Repository<RenderJob>,
@@ -20,7 +24,7 @@ export class RenderService {
     private readonly renderQueue: Queue,
   ) {}
 
-  async render(input: { sessionId: string; lineArt: string; chosenPose: string; prompt: string; history: Array<{ timestamp: string; action: string }> }) {
+  async render(input: { sessionId: string; userId: string; lineArt: string; chosenPose: string; prompt: string; history: Array<{ timestamp: string; action: string }> }) {
     const job = this.renderJobRepository.create({
       sessionId: input.sessionId,
       prompt: input.prompt,
@@ -41,9 +45,11 @@ export class RenderService {
     await this.renderQueue.add('process-render', {
       jobId: saved.id,
       sessionId: input.sessionId,
+      userId: input.userId,
       lineArt: input.lineArt,
       chosenPose: input.chosenPose,
       prompt: input.prompt,
+      outputDir: this.getRenderPublicDirectory(input.userId, input.sessionId),
     }, {
       jobId: saved.id, // BullMQ 내에서도 고유 ID로 관리
       attempts: 3,

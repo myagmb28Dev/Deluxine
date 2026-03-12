@@ -26,6 +26,15 @@ export class AuthService {
     return createHash('sha256').update(token).digest('hex');
   }
 
+  private getJwtSecret(): string {
+    const secret = this.configService.get<string>('auth.jwtSecret')?.trim();
+    if (!secret) {
+      throw new Error('JWT_SECRET is required and must not be empty');
+    }
+
+    return secret;
+  }
+
   private async issueAppTokens(user: User) {
     const payload: JwtPayload = {
       sub: user.id,
@@ -33,12 +42,12 @@ export class AuthService {
     };
 
     const accessToken = await this.jwtService.signAsync({ ...payload }, {
-      secret: this.configService.get<string>('auth.jwtSecret') ?? 'dev-secret',
+      secret: this.getJwtSecret(),
       expiresIn: (this.configService.get<string>('auth.jwtAccessExpiresIn') ?? '15m') as any,
     });
 
     const refreshToken = await this.jwtService.signAsync({ ...payload }, {
-      secret: this.configService.get<string>('auth.jwtSecret') ?? 'dev-secret',
+      secret: this.getJwtSecret(),
       expiresIn: (this.configService.get<string>('auth.jwtRefreshExpiresIn') ?? '7d') as any,
     });
 
@@ -127,7 +136,7 @@ export class AuthService {
 
     try {
       await this.jwtService.verifyAsync<JwtPayload>(refreshToken, {
-        secret: this.configService.get<string>('auth.jwtSecret') ?? 'dev-secret',
+        secret: this.getJwtSecret(),
       });
     } catch {
       return null;

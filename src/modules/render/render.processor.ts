@@ -23,7 +23,7 @@ export class RenderProcessor extends WorkerHost {
   }
 
   async process(job: Job<any, any, string>): Promise<any> {
-    const { jobId, lineArt, chosenPose, prompt } = job.data;
+    const { jobId, lineArt, chosenPose, prompt, outputDir } = job.data;
     this.logger.log(`Processing render job: ${jobId}`);
 
     const renderJob = await this.renderJobRepository.findOne({ where: { id: jobId } });
@@ -43,6 +43,7 @@ export class RenderProcessor extends WorkerHost {
         line_art: lineArt,
         pose_data: chosenPose,
         prompt: prompt,
+        output_dir: outputDir,
       });
 
       // 3. 결과 저장 및 상태 변경: 완료

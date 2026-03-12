@@ -35,3 +35,43 @@ Deluxine은 유저가 업로드한 원본 선화 일러스트를 기반으로, �
 - generation_time
 - history
 
+---
+
+## API 문서
+
+프론트엔드 개발자는 [API_SPECIFICATION.md](./API_SPECIFICATION.md)에서 전체 API 명세와 TypeScript 타입을 확인할 수 있습니다.
+
+### 주요 특징
+
+- **Google OAuth 로그인**: Bearer JWT 토큰 발급 및 관리
+- **비동기 큐 기반 처리**: BullMQ를 통한 포즈 생성/렌더링
+- **상태 폴링**: Redis 캐시로 빠른 상태 조회
+- **다단계 히스토리**: 세션 전체 작업 내역 기록
+
+### 좌표계 규약
+
+모든 `keypoints`의 `x, y` 좌표는 **정규화 형식(0~1)**입니다.
+- `x=0`: 이미지 좌측 끝
+- `x=1`: 이미지 우측 끝
+- `y=0`: 이미지 상단 끝
+- `y=1`: 이미지 하단 끝
+
+프론트에서는 이를 캔버스 크기에 맞춰 변환하여 사용합니다:
+```typescript
+const screenX = keypoint.x * canvasWidth;
+const screenY = keypoint.y * canvasHeight;
+```
+
+### CORS & Origin
+
+기본 개발환경 설정:
+- FE origin: `http://localhost:5173`
+- BE origin 허용: `.env`의 `CORS_ORIGIN` 설정
+
+### 보안
+
+모든 세션/포즈/렌더 API는 JWT Bearer 토큰으로 보호됩니다.
+```http
+Authorization: Bearer {access_token}
+```
+

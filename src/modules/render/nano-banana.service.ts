@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
-import { readFile, writeFile } from 'fs/promises';
+import { mkdir, readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 
@@ -10,6 +10,7 @@ export interface RenderRequest {
   line_art: string;  // 로컬 파일 경로 (예: /uploads/file.png)
   pose_data: any;    // 수정된 포즈 데이터 (JSON)
   prompt: string;    // 사용자 프롬프트
+  output_dir: string;
 }
 
 @Injectable()
@@ -27,7 +28,7 @@ export class NanoBananaService {
     const apiKey = this.configService.get<string>('NANO_BANANA_API_KEY');
 
     // 1. 선화 파일 읽기 및 Base64 변환
-    const absolutePath = join(process.cwd(), request.line_art);
+    const absolutePath = join(process.cwd(), request.line_art.replace(/^\/+/, ''));
     const lineArtBase64 = await readFile(absolutePath, { encoding: 'base64' });
 
     this.logger.log(`Requesting Gemini Image Generation (Nano Banana Pro mode)...`);
@@ -56,8 +57,7 @@ export class NanoBananaService {
               ],
             }],
             generationConfig: {
-              responseModal: 'IMAGE', // 가이드 명시 사항
-              responseMimeType: 'image/png',
+              responseModalities: ['TEXT', 'IMAGE'],
               temperature: 0.7,
             },
           },
@@ -76,13 +76,15 @@ export class NanoBananaService {
       
       // 4. 결과 파일 저장
       const fileName = `render-${randomUUID()}.png`;
-      const outputPath = join(process.cwd(), 'uploads', fileName);
+      const outputDirectory = join(process.cwd(), request.output_dir.replace(/^\/+/, ''));
+      await mkdir(outputDirectory, { recursive: true });
+      const outputPath = join(outputDirectory, fileName);
       await writeFile(outputPath, Buffer.from(base64Data, 'base64'));
 
       this.logger.log(`Image rendered and saved as: ${fileName}`);
 
       return {
-        outputImage: `/uploads/${fileName}`,
+        outputImage: `${request.output_dir}/${fileName}`,
         generationTime: new Date().toISOString(),
       };
     } catch (error) {

@@ -1,10 +1,11 @@
-import { Body, Controller, Get, NotFoundException, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, NotFoundException, Param, Post, Req, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { PoseService } from '../pose/pose.service';
 import { SessionService } from '../session/session.service';
 import { CreateRenderDto } from './dto/create-render.dto';
 import { RenderService } from './render.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { JwtPayload } from '../auth/types/jwt-payload.type';
 
 @ApiTags('render')
 @ApiBearerAuth()
@@ -19,8 +20,8 @@ export class RenderController {
 
   @Post()
   @ApiOperation({ summary: '최종 이미지 생성 (비동기 작업 큐 추가)' })
-  async create(@Param('sessionId') sessionId: string, @Body() dto: CreateRenderDto) {
-    const session = await this.sessionService.findById(sessionId);
+  async create(@Param('sessionId') sessionId: string, @Body() dto: CreateRenderDto, @Req() req: { user: JwtPayload }) {
+    const session = await this.sessionService.findById(sessionId, req.user.sub);
     if (!session) {
       throw new NotFoundException('session not found');
     }
@@ -35,6 +36,7 @@ export class RenderController {
 
     return this.renderService.render({
       sessionId,
+      userId: req.user.sub,
       lineArt: session.lineArtUrl,
       chosenPose: pose.label,
       prompt: dto.prompt,

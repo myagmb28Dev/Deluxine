@@ -16,15 +16,29 @@ export class AllExceptionsFilter implements ExceptionFilter {
         ? exception.getStatus()
         : HttpStatus.INTERNAL_SERVER_ERROR;
 
-    const errorMessage =
-      exception instanceof HttpException
-        ? exception.message
-        : 'Internal server error occurred';
+    const exceptionResponse =
+      exception instanceof HttpException ? exception.getResponse() : null;
 
-    this.logger.error(
-      `HTTP Status: ${httpStatus} Error Message: ${errorMessage}`,
-      exception instanceof Error ? exception.stack : 'Unknown stack',
-    );
+    const extractedMessage =
+      typeof exceptionResponse === 'object' && exceptionResponse !== null
+        ? (exceptionResponse as { message?: string | string[] }).message
+        : null;
+
+    const errorMessage =
+      extractedMessage ??
+      (exception instanceof HttpException
+        ? exception.message
+        : 'Internal server error occurred');
+
+    const logLine = `HTTP Status: ${httpStatus} Error Message: ${Array.isArray(errorMessage) ? errorMessage.join(', ') : errorMessage}`;
+    if (httpStatus >= 500) {
+      this.logger.error(
+        logLine,
+        exception instanceof Error ? exception.stack : 'Unknown stack',
+      );
+    } else {
+      this.logger.warn(logLine);
+    }
 
     const responseBody = {
       statusCode: httpStatus,

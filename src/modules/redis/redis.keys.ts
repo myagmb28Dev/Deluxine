@@ -3,6 +3,10 @@ export class RedisKeys {
     return `session:${sessionId}:current_pose`;
   }
 
+  static poseProgress(sessionId: string): string {
+    return `pose:${sessionId}:progress`;
+  }
+
   static renderJobStatus(jobId: string): string {
     return `render_job:${jobId}:status`;
   }

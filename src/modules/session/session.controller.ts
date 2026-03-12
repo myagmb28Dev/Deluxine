@@ -1,11 +1,13 @@
-import { Body, Controller, Get, NotFoundException, Param, Post, UploadedFile, UseInterceptors, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, ForbiddenException, Get, HttpCode, NotFoundException, Param, Patch, Post, Query, Req, UploadedFile, UseInterceptors, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiTags, ApiConsumes, ApiBody, ApiBearerAuth } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { diskStorage } from 'multer';
-import { extname } from 'path';
+import { memoryStorage } from 'multer';
 import { CreateSessionDto } from './dto/create-session.dto';
+import { ListSessionsDto } from './dto/list-sessions.dto';
+import { UpdateSessionDto } from './dto/update-session.dto';
 import { SessionService } from './session.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { JwtPayload } from '../auth/types/jwt-payload.type';
 
 @ApiTags('session')
 @ApiBearerAuth()
@@ -16,13 +18,7 @@ export class SessionController {
 
   @Post()
   @UseInterceptors(FileInterceptor('file', {
-    storage: diskStorage({
-      destination: './uploads',
-      filename: (req, file, cb) => {
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-        cb(null, `${file.fieldname}-${uniqueSuffix}${extname(file.originalname)}`);
-      },
-    }),
+    storage: memoryStorage(),
   }))
   @ApiConsumes('multipart/form-data')
   @ApiBody({
@@ -33,23 +29,75 @@ export class SessionController {
           type: 'string',
           format: 'binary',
         },
+        title: {
+          type: 'string',
+          example: '점프 구도 실험 A안',
+        },
       },
     },
   })
   @ApiOperation({ summary: '선화 업로드 및 세션 생성' })
-  async create(@UploadedFile() file: Express.Multer.File) {
-    const lineArtUrl = file ? `/uploads/${file.filename}` : '/uploads/default-line.png';
-    return this.sessionService.create(lineArtUrl);
+  async create(
+    @UploadedFile() file: Express.Multer.File,
+    @Body() dto: CreateSessionDto,
+    @Req() req: { user: JwtPayload },
+  ) {
+    const session = await this.sessionService.create({
+      userId: req.user.sub,
+      title: dto.title,
+    });
+
+    if (file) {
+      return this.sessionService.attachLineArtFile(session, file);
+    }
+
+    return session;
+  }
+
+  @Get()
+  @ApiOperation({ summary: '내 세션 목록 조회 (최신순)' })
+  async findMine(@Req() req: { user: JwtPayload }, @Query() query: ListSessionsDto) {
+    return this.sessionService.findSummaryByUser(req.user.sub, query);
   }
 
   @Get(':id')
   @ApiOperation({ summary: '세션 조회' })
-  async findOne(@Param('id') id: string) {
-    const session = await this.sessionService.findById(id);
+  async findOne(@Param('id') id: string, @Req() req: { user: JwtPayload }) {
+    const session = await this.sessionService.findById(id, req.user.sub);
     if (!session) {
+      if (await this.sessionService.exists(id)) {
+        throw new ForbiddenException('forbidden');
+      }
       throw new NotFoundException('session not found');
     }
 
     return session;
+  }
+
+  @Patch(':id')
+  @ApiOperation({ summary: '세션 메타(제목) 수정' })
+  async update(@Param('id') id: string, @Body() dto: UpdateSessionDto, @Req() req: { user: JwtPayload }) {
+    const updated = await this.sessionService.updateSession(id, req.user.sub, dto);
+    if (!updated) {
+      if (await this.sessionService.exists(id)) {
+        throw new ForbiddenException('forbidden');
+      }
+      throw new NotFoundException('session not found');
+    }
+
+    return updated;
+  }
+
+  @Delete(':id')
+  @HttpCode(204)
+  @ApiOperation({ summary: '세션 삭제' })
+  async remove(@Param('id') id: string, @Req() req: { user: JwtPayload }) {
+    const removed = await this.sessionService.deleteSession(id, req.user.sub);
+    if (!removed) {
+      if (await this.sessionService.exists(id)) {
+        throw new ForbiddenException('forbidden');
+      }
+      throw new NotFoundException('session not found');
+    }
   }
 }

@@ -7,10 +7,15 @@ import { JwtPayload } from '../types/jwt-payload.type';
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
   constructor(configService: ConfigService) {
+    const secret = configService.get<string>('auth.jwtSecret')?.trim();
+    if (!secret) {
+      throw new Error('JWT_SECRET is required and must not be empty');
+    }
+
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: configService.get<string>('auth.jwtSecret') ?? 'dev-secret',
+      secretOrKey: secret,
     });
   }
 

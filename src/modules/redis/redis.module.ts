@@ -16,19 +16,38 @@ import { RedisService } from './redis.service';
         const url = configService.get<string>('redis.url');
         const tls = configService.get<boolean>('redis.tls') ?? false;
 
-        if (url) {
-          return new Redis(url, {
-            tls: tls ? {} : undefined,
-          });
-        }
+        const commonOptions = {
+          maxRetriesPerRequest: null as null,
+          enableReadyCheck: false,
+          retryStrategy: (times: number) => {
+            const delay = Math.min(times * 50, 2000);
+            console.warn(`Redis reconnection attempt ${times}, retrying in ${delay}ms...`);
+            return delay;
+          },
+        };
 
-        return new Redis({
-          host: configService.get<string>('redis.host'),
-          port: configService.get<number>('redis.port'),
-          password: configService.get<string>('redis.password') || undefined,
-          db: configService.get<number>('redis.db'),
-          tls: tls ? {} : undefined,
+        const client = url
+          ? new Redis(url, {
+              ...commonOptions,
+            })
+          : new Redis({
+              host: configService.get<string>('redis.host'),
+              port: configService.get<number>('redis.port'),
+              password: configService.get<string>('redis.password') || undefined,
+              db: configService.get<number>('redis.db'),
+              tls: tls ? {} : undefined,
+              ...commonOptions,
+            });
+        
+        client.on('error', (err) => {
+          console.error('Redis connection error:', err?.message || err);
         });
+
+        client.on('connect', () => {
+          console.log('Redis connected successfully');
+        });
+
+        return client;
       },
     },
     RedisService,

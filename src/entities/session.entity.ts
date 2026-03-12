@@ -7,6 +7,12 @@ export class Session {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
+  @Column({ type: 'uuid', nullable: true })
+  userId: string | null;
+
+  @Column({ type: 'varchar', length: 120, nullable: true })
+  title: string | null;
+
   @Column({ type: 'varchar', length: 500, nullable: true })
   lineArtUrl: string;
 
