@@ -6,7 +6,6 @@ import { Pose } from '../../entities/pose.entity';
 import { SessionModule } from '../session/session.module';
 import { PoseController } from './pose.controller';
 import { PoseService } from './pose.service';
-import { GeneratePoseService } from './generate-pose.service';
 import { PoseProcessor } from './pose.processor';
 
 @Module({
@@ -19,7 +18,7 @@ import { PoseProcessor } from './pose.processor';
     }),
   ],
   controllers: [PoseController],
-  providers: [PoseService, GeneratePoseService, PoseProcessor],
-  exports: [PoseService, GeneratePoseService],
+  providers: [PoseService, PoseProcessor],
+  exports: [PoseService],
 })
 export class PoseModule {}

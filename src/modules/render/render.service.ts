@@ -24,7 +24,7 @@ export class RenderService {
     private readonly renderQueue: Queue,
   ) {}
 
-  async render(input: { sessionId: string; userId: string; lineArt: string; chosenPose: string; prompt: string; history: Array<{ timestamp: string; action: string }> }) {
+  async render(input: { sessionId: string; userId: string; lineArt: string; chosenPose: any; prompt: string; history: Array<{ timestamp: string; action: string }> }) {
     const job = this.renderJobRepository.create({
       sessionId: input.sessionId,
       prompt: input.prompt,

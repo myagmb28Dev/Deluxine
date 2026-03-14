@@ -80,7 +80,7 @@ export class PoseController {
 
     return {
       ...pose,
-      coordinateMode: 'normalized',
+      coordinateMode: '1024',
     };
   }
 

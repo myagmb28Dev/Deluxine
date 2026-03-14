@@ -38,7 +38,7 @@ export class RenderController {
       sessionId,
       userId: req.user.sub,
       lineArt: session.lineArtUrl,
-      chosenPose: pose.label,
+      chosenPose: pose.keypoints,
       prompt: dto.prompt,
       history: latest?.history ?? session.history,
     });
