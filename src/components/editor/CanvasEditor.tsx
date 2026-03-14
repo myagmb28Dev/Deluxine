@@ -71,7 +71,8 @@ const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
 
 type EditorDragTarget =
   | { type: 'joint'; index: number }
-  | { type: 'group'; indices: number[] };
+  | { type: 'group'; indices: number[] }
+  | { type: 'global' };
 
 const pointToSegmentDistance = (point: { x: number; y: number }, start: { x: number; y: number }, end: { x: number; y: number }) => {
   const dx = end.x - start.x;
@@ -106,18 +107,19 @@ interface CanvasEditorProps {
   onStart: (x: number, y: number, target?: EditorDragTarget) => void;
   onMove: (x: number, y: number) => void;
   onEnd: () => void;
+  scaleAll: (factor: number) => void;
   isLoading?: boolean;
-  isRefining?: boolean;
 }
 
 export const CanvasEditor: React.FC<CanvasEditorProps> = ({ 
-  keypoints, backgroundImage, jointGuides, topology, draggingIdx, onStart, onMove, onEnd, isLoading, isRefining 
+  keypoints, backgroundImage, jointGuides, topology, draggingIdx, onStart, onMove, onEnd, scaleAll, isLoading
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState<{ x: number; y: number } | null>(null);
+  const [editMode, setEditMode] = useState<'standard' | 'global'>('standard');
 
   const CANVAS_WIDTH = 600;
   const CANVAS_HEIGHT = 800;
@@ -604,6 +606,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
   };
 
   const handleWheel = (event: React.WheelEvent<HTMLCanvasElement>) => {
+    if (!event.ctrlKey) return;
     event.preventDefault();
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -629,6 +632,8 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
   };
 
   const resolveDragTarget = (x: number, y: number): EditorDragTarget | undefined => {
+    if (editMode === 'global') return { type: 'global' };
+
     const point = { x, y };
     const nearJointIndex = keypoints.findIndex((keypoint) => Math.hypot(keypoint.x - x, keypoint.y - y) < 0.04);
     if (nearJointIndex >= 0) return { type: 'joint', index: nearJointIndex };
@@ -704,6 +709,28 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
   return (
     <div className="flex gap-6 items-start">
       <div className="relative glass-card p-4 rounded-2xl shadow-2xl border border-zinc-800">
+        <div className="absolute top-7 left-7 z-20 flex items-center gap-2 rounded-full border border-zinc-800 bg-black/70 px-2 py-1.5 backdrop-blur-sm">
+          <button 
+            onClick={() => setEditMode('standard')} 
+            className={`h-8 px-3 rounded-full text-xs transition-colors ${editMode === 'standard' ? 'bg-white text-black' : 'text-zinc-300 hover:text-white hover:bg-zinc-800'}`}
+          >
+            관절 편집
+          </button>
+          <button 
+            onClick={() => setEditMode('global')} 
+            className={`h-8 px-3 rounded-full text-xs transition-colors ${editMode === 'global' ? 'bg-white text-black' : 'text-zinc-300 hover:text-white hover:bg-zinc-800'}`}
+          >
+            전체 변형
+          </button>
+          {editMode === 'global' && (
+            <>
+              <div className="w-px h-4 bg-zinc-800 mx-1" />
+              <button onClick={() => scaleAll(0.95)} className="h-8 w-8 rounded-full text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors">축소</button>
+              <button onClick={() => scaleAll(1.05)} className="h-8 w-8 rounded-full text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors">확대</button>
+            </>
+          )}
+        </div>
+
         <div className="absolute top-7 right-7 z-20 flex items-center gap-2 rounded-full border border-zinc-800 bg-black/70 px-2 py-1.5 backdrop-blur-sm">
           <button onClick={() => setScale((prev) => Math.max(0.45, prev * 0.9))} className="h-8 w-8 rounded-full text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors">-</button>
           <span className="text-xs font-mono text-zinc-300 w-12 text-center">{Math.round(scale * 100)}%</span>
@@ -725,12 +752,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
         />
         {isLoading && (
           <div className="absolute inset-4 bg-zinc-950/80 backdrop-blur-md rounded-xl flex items-center justify-center">
-            <div className="text-white animate-pulse tracking-widest text-xs font-mono uppercase">Analyzing Line Art...</div>
-          </div>
-        )}
-        {isRefining && !isLoading && (
-          <div className="absolute inset-4 bg-zinc-950/70 backdrop-blur-sm rounded-xl flex items-center justify-center pointer-events-none">
-            <div className="text-white tracking-widest text-xs font-mono uppercase">Refining Pose Accuracy...</div>
+            <div className="text-white animate-pulse tracking-widest text-xs font-mono uppercase">Preparing Standard Mannequin...</div>
           </div>
         )}
       </div>

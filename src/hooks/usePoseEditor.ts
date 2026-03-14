@@ -3,7 +3,8 @@ import type { Keypoint } from '../types';
 
 type DragTarget =
   | { type: 'joint'; index: number }
-  | { type: 'group'; indices: number[] };
+  | { type: 'group'; indices: number[] }
+  | { type: 'global' };
 
 type DragState = {
   target: DragTarget;
@@ -67,19 +68,47 @@ export const usePoseEditor = (initialKeypoints: Keypoint[], onUpdate: (kps: Keyp
     } else {
       const deltaX = x - dragState.anchor.x;
       const deltaY = y - dragState.anchor.y;
-      dragState.target.indices.forEach((index) => {
-        newKps[index] = {
-          ...newKps[index],
-          x: clamp01(dragState.initialKeypoints[index].x + deltaX),
-          y: clamp01(dragState.initialKeypoints[index].y + deltaY),
-        };
-      });
+      
+      if (dragState.target.type === 'global') {
+        dragState.initialKeypoints.forEach((_, index) => {
+          newKps[index] = {
+            ...dragState.initialKeypoints[index],
+            x: clamp01(dragState.initialKeypoints[index].x + deltaX),
+            y: clamp01(dragState.initialKeypoints[index].y + deltaY),
+          };
+        });
+      } else {
+        dragState.target.indices.forEach((index) => {
+          newKps[index] = {
+            ...newKps[index],
+            x: clamp01(dragState.initialKeypoints[index].x + deltaX),
+            y: clamp01(dragState.initialKeypoints[index].y + deltaY),
+          };
+        });
+      }
     }
 
     setKeypoints(newKps);
     keypointsRef.current = newKps;
     hasPendingChangesRef.current = true;
   }, []);
+
+  const scaleAll = useCallback((factor: number) => {
+    if (keypoints.length === 0) return;
+    
+    // Find center of all keypoints
+    const centerX = keypoints.reduce((sum, kp) => sum + kp.x, 0) / keypoints.length;
+    const centerY = keypoints.reduce((sum, kp) => sum + kp.y, 0) / keypoints.length;
+
+    const newKps = keypoints.map(kp => ({
+      ...kp,
+      x: clamp01(centerX + (kp.x - centerX) * factor),
+      y: clamp01(centerY + (kp.y - centerY) * factor),
+    }));
+
+    setKeypoints(newKps);
+    onUpdate(newKps);
+  }, [keypoints, onUpdate]);
 
   const handleEnd = useCallback(() => {
     if (dragStateRef.current && hasPendingChangesRef.current) {
@@ -90,5 +119,5 @@ export const usePoseEditor = (initialKeypoints: Keypoint[], onUpdate: (kps: Keyp
     setDraggingIdx(null);
   }, [onUpdate]);
 
-  return { keypoints, draggingIdx, handleStart, handleMove, handleEnd };
+  return { keypoints, draggingIdx, handleStart, handleMove, handleEnd, scaleAll };
 };

@@ -1,6 +1,5 @@
 ﻿import React from 'react';
 import { motion } from 'framer-motion';
-import { Sparkles } from 'lucide-react';
 import { Button } from '../ui';
 
 interface LoginViewProps {
@@ -20,15 +19,8 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
         className="z-10 flex flex-col items-center text-center max-w-md w-full"
       >
         <div className="mb-12">
-          <motion.div 
-            initial={{ scale: 0.8 }}
-            animate={{ scale: 1 }}
-            className="w-20 h-20 bg-white flex items-center justify-center rounded-3xl mb-8 shadow-[0_0_50px_rgba(255,255,255,0.2)]"
-          >
-            <Sparkles className="text-black" size={40} />
-          </motion.div>
           <h1 className="text-5xl font-black tracking-tighter text-white mb-4">DELUXINE</h1>
-          <p className="text-zinc-500 text-sm tracking-[0.2em] font-medium uppercase">Next-Gen AI Image Pipeline</p>
+          <p className="text-zinc-500 text-sm tracking-[0.2em] font-medium">When you're stuck on a pose fixing</p>
         </div>
 
         <div className="w-full space-y-4">

@@ -10,7 +10,6 @@ import { usePoseEditor } from './hooks/usePoseEditor';
 import { useAuth } from './hooks/useAuth';
 import { sessionApi, poseApi, renderApi } from './api/client';
 import { getAuthStore } from './lib/authStore';
-import { refineKeypointsByLineArt } from './lib/keypointRefine';
 import type { PipelineStatus, Keypoint } from './types';
 import type { PoseGuideJoint, PoseTopologyResponse, SessionListItem } from './types/api';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -35,6 +34,10 @@ const saveSessionOverrides = (overrides: SessionOverrides) => {
 const CANVAS_WIDTH = 600;
 const CANVAS_HEIGHT = 800;
 
+// Backend uses 1024x1024 as its internal coordinate system
+const SERVER_WIDTH = 1024;
+const SERVER_HEIGHT = 1024;
+
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 
 const toDisplayKeypoints = (kps: Keypoint[], coordinateMode?: 'normalized' | 'pixel') => {
@@ -50,8 +53,8 @@ const toDisplayKeypoints = (kps: Keypoint[], coordinateMode?: 'normalized' | 'pi
       mode: 'pixel' as const,
       keypoints: kps.map((kp) => ({
         ...kp,
-        x: clamp01(kp.x / CANVAS_WIDTH),
-        y: clamp01(kp.y / CANVAS_HEIGHT),
+        x: clamp01(kp.x / SERVER_WIDTH),
+        y: clamp01(kp.y / SERVER_HEIGHT),
       })),
     };
   }
@@ -67,8 +70,8 @@ const toDisplayKeypoints = (kps: Keypoint[], coordinateMode?: 'normalized' | 'pi
     mode: 'pixel' as const,
     keypoints: kps.map((kp) => ({
       ...kp,
-      x: clamp01(kp.x / CANVAS_WIDTH),
-      y: clamp01(kp.y / CANVAS_HEIGHT),
+      x: clamp01(kp.x / SERVER_WIDTH),
+      y: clamp01(kp.y / SERVER_HEIGHT),
     })),
   };
 };
@@ -77,8 +80,8 @@ const toApiKeypoints = (kps: Keypoint[], mode: 'normalized' | 'pixel') => {
   if (mode === 'normalized') return kps;
   return kps.map((kp) => ({
     ...kp,
-    x: kp.x * CANVAS_WIDTH,
-    y: kp.y * CANVAS_HEIGHT,
+    x: kp.x * SERVER_WIDTH,
+    y: kp.y * SERVER_HEIGHT,
   }));
 };
 
@@ -108,7 +111,6 @@ const AppContent: React.FC = () => {
   const [poseTopology, setPoseTopology] = useState<PoseTopologyResponse | null>(null);
   const [recentSessions, setRecentSessions] = useState<SessionListItem[]>([]);
   const [sessionOverrides, setSessionOverrides] = useState<SessionOverrides>(() => loadSessionOverrides());
-  const [isRefiningPose, setIsRefiningPose] = useState(false);
 
   const sessionPanelItems = React.useMemo(
     () => recentSessions
@@ -124,7 +126,7 @@ const AppContent: React.FC = () => {
     [recentSessions, sessionOverrides],
   );
 
-  const { keypoints, draggingIdx, handleStart, handleMove, handleEnd } = usePoseEditor(
+  const { keypoints, draggingIdx, handleStart, handleMove, handleEnd, scaleAll } = usePoseEditor(
     initialKps,
     (kps) => { if (sessionId) poseApi.update(sessionId, toApiKeypoints(kps, poseCoordinateMode)); }
   );
@@ -140,24 +142,7 @@ const AppContent: React.FC = () => {
     setProgress(0);
     setJointGuides([]);
     setPoseTopology(null);
-    setIsRefiningPose(false);
   }, []);
-
-  const refineAndApplyKeypoints = React.useCallback(async (sourceKeypoints: Keypoint[]) => {
-    if (!lineArtImage || sourceKeypoints.length === 0) return sourceKeypoints;
-
-    setIsRefiningPose(true);
-    try {
-      const refined = await refineKeypointsByLineArt(lineArtImage, sourceKeypoints, CANVAS_WIDTH, CANVAS_HEIGHT, poseTopology || undefined);
-      setInitialKps(refined);
-      if (sessionId) {
-        await poseApi.update(sessionId, toApiKeypoints(refined, poseCoordinateMode));
-      }
-      return refined;
-    } finally {
-      setIsRefiningPose(false);
-    }
-  }, [lineArtImage, poseCoordinateMode, poseTopology, sessionId]);
 
   const restoreSession = React.useCallback(async (targetSessionId: string) => {
     if (!hasAuthSession()) return;
@@ -190,8 +175,7 @@ const AppContent: React.FC = () => {
         const pose = await poseApi.getCurrent(session.id);
         const converted = toDisplayKeypoints((pose.keypoints || []) as Keypoint[], pose.coordinateMode);
         setPoseCoordinateMode(converted.mode);
-        const refined = await refineAndApplyKeypoints(converted.keypoints);
-        setInitialKps(refined);
+        setInitialKps(converted.keypoints);
         setStatus('editing');
       } catch {
         try {
@@ -325,8 +309,7 @@ const AppContent: React.FC = () => {
           const pose = await poseApi.getCurrent(sid);
           const converted = toDisplayKeypoints((pose.keypoints || []) as Keypoint[], pose.coordinateMode);
           setPoseCoordinateMode(converted.mode);
-          const refined = await refineAndApplyKeypoints(converted.keypoints);
-          setInitialKps(refined);
+          setInitialKps(converted.keypoints);
           setProgress(100);
           setStatus('editing');
           clearInterval(interval);
@@ -401,37 +384,40 @@ const AppContent: React.FC = () => {
         onRenameSession={renameSession}
         onDeleteSession={deleteSessionFromPanel}
       />
-      <main className="flex-1 relative flex flex-col items-center justify-center bg-[#050505] p-20">
-        {(status === 'analyzing' || status === 'rendering') && (
-          <motion.div 
-            initial={{ opacity: 0, y: -10 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="absolute top-24 w-80 px-6"
-          >
-            <ProgressBar progress={progress} status={status === 'analyzing' ? 'analyzing' : 'rendering'} />
+      <main className="flex-1 relative flex flex-col items-center bg-[#050505] overflow-hidden">
+        <div className="w-full flex-1 overflow-y-auto flex flex-col items-center p-20 pt-32">
+          {(status === 'analyzing' || status === 'rendering') && (
+            <motion.div 
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="w-80 mb-12"
+            >
+              <ProgressBar progress={progress} status={status === 'analyzing' ? 'analyzing' : 'rendering'} />
+            </motion.div>
+          )}
+          <motion.div layout className="relative">
+            <CanvasEditor 
+              keypoints={keypoints}
+              backgroundImage={lineArtImage}
+              jointGuides={jointGuides}
+              topology={poseTopology}
+              draggingIdx={draggingIdx}
+              onStart={handleStart}
+              onMove={handleMove}
+              onEnd={handleEnd}
+              isLoading={status === 'analyzing'}
+              scaleAll={scaleAll}
+            />
+            <AnimatePresence>
+              {status === 'idle' && (
+                <motion.div exit={{ opacity: 0 }} className="absolute inset-0 flex flex-col items-center justify-center bg-black/40 rounded-2xl border border-dashed border-zinc-800">
+                  <div className="text-zinc-500 text-[10px] font-bold tracking-[0.2em] uppercase">Upload Line Art to Start</div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </motion.div>
-        )}
-        <motion.div layout className="relative">
-          <CanvasEditor 
-            keypoints={keypoints}
-            backgroundImage={lineArtImage}
-            jointGuides={jointGuides}
-            topology={poseTopology}
-            draggingIdx={draggingIdx}
-            onStart={handleStart}
-            onMove={handleMove}
-            onEnd={handleEnd}
-            isLoading={status === 'analyzing'}
-            isRefining={isRefiningPose}
-          />
-          <AnimatePresence>
-            {status === 'idle' && (
-              <motion.div exit={{ opacity: 0 }} className="absolute inset-0 flex flex-col items-center justify-center bg-black/40 rounded-2xl border border-dashed border-zinc-800">
-                <div className="text-zinc-500 text-[10px] font-bold tracking-[0.2em] uppercase">Upload Line Art to Start</div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </motion.div>
+        </div>
+        
         {(status === 'editing' || status === 'rendering' || status === 'completed') && (
           <PromptBar 
             prompt={prompt}
