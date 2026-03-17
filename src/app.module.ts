@@ -9,7 +9,6 @@ import { BullModule } from '@nestjs/bullmq';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { join } from 'path';
 import appConfig from './config/app.config';
-import authConfig from './config/auth.config';
 import databaseConfig from './config/database.config';
 import redisConfig from './config/redis.config';
 import { AuthModule } from './modules/auth/auth.module';
@@ -17,13 +16,14 @@ import { PoseModule } from './modules/pose/pose.module';
 import { RedisModule } from './modules/redis/redis.module';
 import { RenderModule } from './modules/render/render.module';
 import { SessionModule } from './modules/session/session.module';
+import { FirebaseModule } from './modules/firebase/firebase.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: '.env',
-      load: [appConfig, authConfig, databaseConfig, redisConfig],
+      load: [appConfig, databaseConfig, redisConfig],
     }),
     ThrottlerModule.forRoot([{
       ttl: 60000, // 1분 (ms 단위)
@@ -114,6 +114,7 @@ import { SessionModule } from './modules/session/session.module';
     SessionModule,
     PoseModule,
     RenderModule,
+    FirebaseModule,
   ],
   controllers: [],
   providers: [

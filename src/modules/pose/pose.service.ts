@@ -66,7 +66,7 @@ export class PoseService {
     };
   }
 
-  async update(sessionId: string, keypoints: Array<{ name: string; x: number; y: number }>) {
+  async update(sessionId: string, keypoints: Array<{ name: string; x: number; y: number; z?: number; confidence?: number }>) {
     // 임시 키포인트 저장 (DB 저장 전)
     await this.redisService.set(RedisKeys.tempPoseKeypoints(sessionId), keypoints, this.TEMP_TTL);
 
@@ -76,7 +76,13 @@ export class PoseService {
       throw new Error('No generated pose found to update.');
     }
 
-    pose.keypoints = keypoints.map((kp) => ({ ...kp, confidence: 1.0 }));
+    pose.keypoints = keypoints.map((kp) => ({
+      name: kp.name,
+      x: kp.x,
+      y: kp.y,
+      ...(typeof kp.z !== 'undefined' ? { z: kp.z } : {}),
+      confidence: typeof kp.confidence !== 'undefined' ? kp.confidence : 1.0,
+    }));
     const updated = await this.poseRepository.save(pose);
 
     // 캐시 갱신 및 임시 데이터 삭제
@@ -101,6 +107,17 @@ export class PoseService {
     }
 
     return pose;
+  }
+
+  async findById(poseId: string) {
+    const pose = await this.poseRepository.findOne({ where: { id: poseId } });
+    if (pose) {
+      // 캐시 보강
+      await this.redisService.set(RedisKeys.poseCache(pose.sessionId), pose, this.CACHE_TTL);
+      await this.redisService.set(RedisKeys.sessionCurrentPose(pose.sessionId), pose.id, this.CACHE_TTL);
+      return pose;
+    }
+    return null;
   }
 
   async getPoseGenerationStatus(sessionId: string): Promise<string | null> {

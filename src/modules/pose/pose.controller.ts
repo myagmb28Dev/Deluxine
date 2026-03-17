@@ -4,11 +4,11 @@ import { SkipThrottle } from '@nestjs/throttler';
 import { SessionService } from '../session/session.service';
 import { UpdatePoseDto } from './dto/update-pose.dto';
 import { PoseService } from './pose.service';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { FirebaseAuthGuard } from '../auth/guards/firebase-auth.guard';
 
 @ApiTags('pose')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(FirebaseAuthGuard)
 @Controller('sessions/:sessionId/pose')
 export class PoseController {
   constructor(
@@ -96,5 +96,23 @@ export class PoseController {
     const updated = await this.poseService.update(sessionId, dto.keypoints);
     await this.sessionService.appendHistory(sessionId, 'pose.updated');
     return updated;
+  }
+}
+
+@ApiTags('pose')
+@ApiBearerAuth()
+@UseGuards(FirebaseAuthGuard)
+@Controller('poses')
+export class PoseResourceController {
+  constructor(private readonly poseService: PoseService) {}
+
+  @Get(':poseId')
+  @ApiOperation({ summary: 'ID로 특정 포즈 조회' })
+  async findOne(@Param('poseId') poseId: string) {
+    const pose = await this.poseService.findById(poseId);
+    if (!pose) {
+      throw new NotFoundException('pose not found');
+    }
+    return pose;
   }
 }

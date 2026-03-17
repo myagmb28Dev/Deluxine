@@ -1,7 +1,8 @@
 export interface Keypoint {
   name: string;
-  x: number;
-  y: number;
+  x: number; // 3D 공간의 X (좌우)
+  y: number; // 3D 공간의 Y (상하)
+  z?: number; // 3D 공간의 Z (깊이 - 카메라와의 거리)
   confidence: number;
 }
 

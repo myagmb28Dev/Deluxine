@@ -14,7 +14,8 @@ export class Pose {
   label: string;
 
   @Column({ type: 'jsonb' })
-  keypoints: Array<{ name: string; x: number; y: number; confidence: number }>;
+  // keypoints may include optional `z` for 3D and `confidence`
+  keypoints: Array<{ name: string; x: number; y: number; z?: number; confidence: number }>;
 
   @Column({ type: 'boolean', default: false })
   isChosen: boolean;

@@ -5,6 +5,7 @@ import { BullModule } from '@nestjs/bullmq';
 import { RenderJob } from '../../entities/render-job.entity';
 import { PoseModule } from '../pose/pose.module';
 import { SessionModule } from '../session/session.module';
+import { AuthModule } from '../auth/auth.module';
 import { RenderController } from './render.controller';
 import { RenderService } from './render.service';
 import { NanoBananaService } from './nano-banana.service';
@@ -15,6 +16,7 @@ import { RenderProcessor } from './render.processor';
     TypeOrmModule.forFeature([RenderJob]),
     SessionModule,
     PoseModule,
+    AuthModule,
     HttpModule,
     BullModule.registerQueue({
       name: 'render',

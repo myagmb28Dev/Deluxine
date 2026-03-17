@@ -1,34 +1,18 @@
 import { Module } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { JwtModule } from '@nestjs/jwt';
-import { PassportModule } from '@nestjs/passport';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { User } from '../../entities/user.entity';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
-import { GoogleStrategy } from './strategies/google.strategy';
-import { JwtStrategy } from './strategies/jwt.strategy';
+import { FirebaseAuthGuard } from './guards/firebase-auth.guard';
+import { FirebaseModule } from '../firebase/firebase.module';
 
 @Module({
   imports: [
-    PassportModule.register({ session: false }),
-    JwtModule.registerAsync({
-      inject: [ConfigService],
-      useFactory: (configService: ConfigService) => {
-        const secret = configService.get<string>('auth.jwtSecret')?.trim();
-        if (!secret) {
-          throw new Error('JWT_SECRET is required and must not be empty');
-        }
-
-        return {
-          secret,
-        };
-      },
-    }),
     TypeOrmModule.forFeature([User]),
+    FirebaseModule, // FirebaseAdmin 주입을 위해 필요
   ],
   controllers: [AuthController],
-  providers: [AuthService, GoogleStrategy, JwtStrategy],
-  exports: [AuthService],
+  providers: [AuthService, FirebaseAuthGuard],
+  exports: [AuthService, FirebaseAuthGuard],
 })
 export class AuthModule {}
