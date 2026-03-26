@@ -19,10 +19,10 @@ export class Session {
   @Column({ type: 'jsonb', default: [] })
   history: Array<{ timestamp: string; action: string; payload?: Record<string, unknown> }>;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 
-  @UpdateDateColumn()
+  @UpdateDateColumn({ type: 'timestamptz' })
   updatedAt: Date;
 
   @OneToMany(() => Pose, (pose) => pose.session)

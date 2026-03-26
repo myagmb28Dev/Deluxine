@@ -8,5 +8,9 @@ export default registerAs('database', () => ({
   username: process.env.DB_USERNAME ?? 'postgres',
   password: process.env.DB_PASSWORD ?? 'postgres',
   name: process.env.DB_NAME ?? 'ai_pose',
-  synchronize: true, // Always true as requested
+  synchronize: true,
+  timezone: '+09:00',
+  extra: {
+    timezone: '+09:00',
+  },
 }));

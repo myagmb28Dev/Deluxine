@@ -8,13 +8,17 @@ import { UpdateSessionDto } from './dto/update-session.dto';
 import { SessionService } from './session.service';
 import { FirebaseAuthGuard } from '../auth/guards/firebase-auth.guard';
 import { User } from '../../entities/user.entity';
+import { PoseService } from '../pose/pose.service';
 
 @ApiTags('session')
 @ApiBearerAuth()
 @UseGuards(FirebaseAuthGuard)
 @Controller('sessions')
 export class SessionController {
-  constructor(private readonly sessionService: SessionService) {}
+  constructor(
+    private readonly sessionService: SessionService,
+    private readonly poseService: PoseService,
+  ) {}
 
   @Post()
   @UseInterceptors(FileInterceptor('file', {
@@ -33,6 +37,11 @@ export class SessionController {
           type: 'string',
           example: '점프 구도 실험 A안',
         },
+        targetRatio: {
+          type: 'number',
+          example: 7,
+          description: '희망 등신대 (0은 AUTO)',
+        },
       },
     },
   })
@@ -48,7 +57,20 @@ export class SessionController {
     });
 
     if (file) {
-      return this.sessionService.attachLineArtFile(session, file);
+      const updatedSession = await this.sessionService.attachLineArtFile(session, file);
+      
+      // 파일 업로드 후 자동으로 포즈 생성 시작
+      try {
+        const generation = await this.poseService.generate(updatedSession.id, dto.targetRatio);
+        if ((generation as { enqueued?: boolean }).enqueued) {
+          await this.sessionService.appendHistory(updatedSession.id, 'pose.auto_generation_requested');
+        }
+      } catch (error) {
+        // 포즈 생성 실패해도 세션은 반환 (사용자가 나중에 다시 시도할 수 있음)
+        console.error('Auto pose generation failed:', error);
+      }
+      
+      return updatedSession;
     }
 
     return session;

@@ -27,6 +27,7 @@ describe('PoseService (Async Queue Test)', () => {
   };
 
   const mockPoseQueue = {
+    getJob: jest.fn().mockResolvedValue(null),
     add: jest.fn().mockResolvedValue({ id: 'job-1' }),
   };
 
@@ -73,6 +74,7 @@ describe('PoseService (Async Queue Test)', () => {
       status: 'pending',
       message: 'Pose generation has been enqueued. Please check back later.',
       sessionId: 'session-123',
+      enqueued: true,
     });
     
     console.log('✅ PoseService 비동기 큐 등록 테스트 성공!');

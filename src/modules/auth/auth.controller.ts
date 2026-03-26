@@ -1,4 +1,4 @@
-import { Controller, Delete, Get, NotFoundException, Req, UseGuards } from '@nestjs/common';
+import { Controller, Delete, Get, NotFoundException, Param, Post, Req, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { FirebaseAuthGuard } from './guards/firebase-auth.guard';
@@ -35,5 +35,12 @@ export class AuthController {
     }
 
     return result;
+  }
+
+  @Post('users/:userId/logout')
+  @ApiOperation({ summary: '로그아웃 처리 (404 방지용)' })
+  async logout(@Param('userId') userId: string) {
+    // 현재 Firebase Auth가 클라이언트 측에서 처리하므로 서버에서는 성공 응답만 반환
+    return { success: true, message: 'logged out' };
   }
 }

@@ -1,10 +1,11 @@
-import { Body, Controller, Get, NotFoundException, Param, Patch, Post, UseGuards } from '@nestjs/common';
-import { ApiOperation, ApiTags, ApiBearerAuth } from '@nestjs/swagger';
+import { Body, Controller, Get, NotFoundException, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { ApiOperation, ApiTags, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
 import { SessionService } from '../session/session.service';
 import { UpdatePoseDto } from './dto/update-pose.dto';
 import { PoseService } from './pose.service';
 import { FirebaseAuthGuard } from '../auth/guards/firebase-auth.guard';
+import { User } from '../../entities/user.entity';
 
 @ApiTags('pose')
 @ApiBearerAuth()
@@ -17,21 +18,35 @@ export class PoseController {
   ) {}
 
   @Post('generate')
+  @ApiQuery({ name: 'targetRatio', required: false, type: Number, description: '희망 등신대 (예: 3.0, 7.0)' })
+  @ApiQuery({ name: 'force', required: false, type: Boolean, description: 'true일 때 기존 포즈가 있어도 재생성' })
   @ApiOperation({ summary: '도형화 포즈 자동 생성 (비동기 큐 처리)' })
-  async generate(@Param('sessionId') sessionId: string) {
-    const session = await this.sessionService.findById(sessionId);
+  async generate(
+    @Param('sessionId') sessionId: string,
+    @Query('targetRatio') targetRatio?: number,
+    @Query('force') force?: string,
+    @Req() req?: { user: User },
+  ) {
+    const session = await this.sessionService.findById(sessionId, req?.user.id);
     if (!session) {
       throw new NotFoundException('session not found');
     }
 
-    const response = await this.poseService.generate(sessionId);
-    await this.sessionService.appendHistory(sessionId, 'pose.generation_requested');
+    const response = await this.poseService.generate(sessionId, targetRatio, force === 'true');
+    if ((response as { enqueued?: boolean }).enqueued) {
+      await this.sessionService.appendHistory(sessionId, 'pose.generation_requested');
+    }
     return response;
   }
 
   @Get('status')
   @ApiOperation({ summary: '포즈 생성 작업 상태 조회 (Polling 용도)' })
-  async getStatus(@Param('sessionId') sessionId: string) {
+  async getStatus(@Param('sessionId') sessionId: string, @Req() req: { user: User }) {
+    const session = await this.sessionService.findById(sessionId, req.user.id);
+    if (!session) {
+      throw new NotFoundException('session not found');
+    }
+
     const status = await this.poseService.getPoseGenerationStatus(sessionId);
     const progress = await this.poseService.getPoseProgress(sessionId);
 
@@ -52,7 +67,7 @@ export class PoseController {
     // 진행 중: progress 포함
     const progressValue = progress ?? (status === 'generating' ? 20 : 0);
     if (status === 'failed') {
-      return { status, progress: progressValue, phase: 'failed' };
+      return { status, progress: -1, phase: 'failed' }; // 프론트엔드 PoseStatusResponse 규격 준수
     }
 
     return { status, progress: progressValue, phase: 'processing' };
@@ -72,7 +87,12 @@ export class PoseController {
 
   @Get()
   @ApiOperation({ summary: '현재 포즈 조회' })
-  async getCurrent(@Param('sessionId') sessionId: string) {
+  async getCurrent(@Param('sessionId') sessionId: string, @Req() req: { user: User }) {
+    const session = await this.sessionService.findById(sessionId, req.user.id);
+    if (!session) {
+      throw new NotFoundException('session not found');
+    }
+
     const pose = await this.poseService.findBySessionId(sessionId);
     if (!pose) {
       throw new NotFoundException('pose not found');
@@ -80,39 +100,21 @@ export class PoseController {
 
     return {
       ...pose,
-      coordinateMode: '1024',
+      coordinateMode: 'normalized',
     };
   }
 
   @Patch()
   @SkipThrottle()
   @ApiOperation({ summary: '포즈 키포인트 수정' })
-  async update(@Param('sessionId') sessionId: string, @Body() dto: UpdatePoseDto) {
-    const session = await this.sessionService.findById(sessionId);
+  async update(@Param('sessionId') sessionId: string, @Body() dto: UpdatePoseDto, @Req() req: { user: User }) {
+    const session = await this.sessionService.findById(sessionId, req.user.id);
     if (!session) {
       throw new NotFoundException('session not found');
     }
 
-    const updated = await this.poseService.update(sessionId, dto.keypoints);
+    const updated = await this.poseService.update(sessionId, dto.keypoints, dto.editorState);
     await this.sessionService.appendHistory(sessionId, 'pose.updated');
     return updated;
-  }
-}
-
-@ApiTags('pose')
-@ApiBearerAuth()
-@UseGuards(FirebaseAuthGuard)
-@Controller('poses')
-export class PoseResourceController {
-  constructor(private readonly poseService: PoseService) {}
-
-  @Get(':poseId')
-  @ApiOperation({ summary: 'ID로 특정 포즈 조회' })
-  async findOne(@Param('poseId') poseId: string) {
-    const pose = await this.poseService.findById(poseId);
-    if (!pose) {
-      throw new NotFoundException('pose not found');
-    }
-    return pose;
   }
 }

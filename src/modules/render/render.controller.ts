@@ -38,8 +38,9 @@ export class RenderController {
       sessionId,
       userId: req.user.id,
       lineArt: session.lineArtUrl,
-      chosenPose: pose.keypoints,
+      chosenPose: pose, // keypoints 배열이 아닌 pose 객체 전체를 전달
       prompt: dto.prompt,
+      poseProjectionImage: dto.poseProjectionImage,
       history: latest?.history ?? session.history,
     });
   }
@@ -51,7 +52,7 @@ export class RenderController {
     const statusFromCache = await this.renderService.getJobStatus(jobId);
 
     // 진행 중인 상태('pending', 'processing' 등)는 DB 조회 없이 캐시에서 바로 반환하여 성능 확보
-    if (statusFromCache && !['completed', 'failed'].includes(statusFromCache)) {
+    if (statusFromCache && !['completed', 'failed', 'quota_exceeded'].includes(statusFromCache)) {
       return {
         job_id: jobId,
         status: statusFromCache,

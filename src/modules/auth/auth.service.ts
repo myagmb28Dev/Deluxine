@@ -60,9 +60,11 @@ export class AuthService {
 
     return {
       user_id: user.id,
-      firebase_uid: user.firebaseUid,
+      google_id: user.firebaseUid, // 프론트엔드 MeResponse 규격에 맞춤
       email: user.email,
       display_name: user.displayName,
+      first_name: user.firstName,
+      last_name: user.lastName,
       picture: user.picture,
       created_at: user.createdAt.toISOString(),
       updated_at: user.updatedAt.toISOString(),

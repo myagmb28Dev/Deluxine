@@ -17,13 +17,27 @@ export class Pose {
   // keypoints may include optional `z` for 3D and `confidence`
   keypoints: Array<{ name: string; x: number; y: number; z?: number; confidence: number }>;
 
+  @Column({ type: 'jsonb', nullable: true })
+  editorState: {
+    version: string;
+    wholeTransform: {
+      position: [number, number, number];
+      quaternion: [number, number, number, number];
+      scale: [number, number, number];
+    };
+    bones: Record<string, { quaternion: [number, number, number, number] }>;
+  } | null;
+
+  @Column({ type: 'float', nullable: true })
+  detectedRatio: number | null;
+
   @Column({ type: 'boolean', default: false })
   isChosen: boolean;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 
-  @UpdateDateColumn()
+  @UpdateDateColumn({ type: 'timestamptz' })
   updatedAt: Date;
 
   @ManyToOne(() => Session, (session) => session.poses)

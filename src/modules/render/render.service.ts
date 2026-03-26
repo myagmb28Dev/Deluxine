@@ -24,7 +24,15 @@ export class RenderService {
     private readonly renderQueue: Queue,
   ) {}
 
-  async render(input: { sessionId: string; userId: string; lineArt: string; chosenPose: any; prompt: string; history: Array<{ timestamp: string; action: string }> }) {
+  async render(input: {
+    sessionId: string;
+    userId: string;
+    lineArt: string;
+    chosenPose: any;
+    prompt: string;
+    poseProjectionImage?: string;
+    history: Array<{ timestamp: string; action: string }>;
+  }) {
     const job = this.renderJobRepository.create({
       sessionId: input.sessionId,
       prompt: input.prompt,
@@ -32,6 +40,7 @@ export class RenderService {
       metadata: {
         line_art: input.lineArt,
         chosen_pose: input.chosenPose,
+        has_pose_projection_image: Boolean(input.poseProjectionImage),
         history: input.history,
       },
     });
@@ -49,13 +58,14 @@ export class RenderService {
       lineArt: input.lineArt,
       chosenPose: input.chosenPose,
       prompt: input.prompt,
+      poseProjectionImage: input.poseProjectionImage,
       outputDir: this.getRenderPublicDirectory(input.userId, input.sessionId),
     }, {
-      jobId: saved.id, // BullMQ 내에서도 고유 ID로 관리
-      attempts: 3,
+      jobId: saved.id,
+      attempts: 5, // 재시도 횟수 증가
       backoff: {
         type: 'exponential',
-        delay: 5000,
+        delay: 10000, // 기본 대기 시간을 10초로 늘림 (429 대응)
       },
     });
 

@@ -41,7 +41,7 @@ export class SessionService {
       userId: input.userId,
       title: input.title?.trim() || null,
       lineArtUrl: input.lineArtUrl ?? 'line.png',
-      history: [{ timestamp: new Date().toISOString(), action: 'session.created' }],
+      history: [{ timestamp: new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Seoul' }).replace(' ', 'T'), action: 'session.created' }],
     });
 
     const saved = await this.sessionRepository.save(session);
@@ -67,7 +67,8 @@ export class SessionService {
     await writeFile(filePath, file.buffer);
 
     session.lineArtUrl = `${this.getSessionPublicPath(session.userId, session.id)}/${fileName}`;
-    session.history.push({ timestamp: new Date().toISOString(), action: 'session.line_art_uploaded' });
+    const toKSTISO = () => new Date(new Date().getTime() + (9 * 60 * 60 * 1000)).toISOString().replace('Z', '+09:00');
+    session.history.push({ timestamp: toKSTISO(), action: 'session.line_art_uploaded' });
 
     const updated = await this.sessionRepository.save(session);
     await this.redisService.set(RedisKeys.sessionCache(session.id), updated, this.CACHE_TTL);
@@ -164,12 +165,20 @@ export class SessionService {
 
     const [sessions, total] = await Promise.all([qb.getMany(), totalQb.getCount()]);
     const hasNext = sessions.length > limit;
-    const items = sessions.slice(0, limit).map((session) => ({
-      id: session.id,
-      title: session.title,
-      createdAt: session.createdAt,
-      updatedAt: session.updatedAt,
-    }));
+    const items = sessions.slice(0, limit).map((session) => {
+      const pad = (n: number) => n.toString().padStart(2, '0');
+      const toKSTString = (d: Date) => {
+        const offsetDate = new Date(d.getTime() + (9 * 60 * 60 * 1000));
+        return offsetDate.toISOString().replace('Z', '+09:00');
+      };
+      
+      return {
+        id: session.id,
+        title: session.title,
+        createdAt: toKSTString(session.createdAt),
+        updatedAt: toKSTString(session.updatedAt),
+      };
+    });
 
     const last = sessions.slice(0, limit).at(-1);
     const nextCursor = hasNext && last
@@ -199,7 +208,7 @@ export class SessionService {
       session.title = input.title.trim() || null;
     }
 
-    session.history.push({ timestamp: new Date().toISOString(), action: 'session.updated' });
+    session.history.push({ timestamp: new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Seoul' }).replace(' ', 'T'), action: 'session.updated' });
     const updated = await this.sessionRepository.save(session);
     await this.redisService.set(RedisKeys.sessionCache(id), updated, this.CACHE_TTL);
 
@@ -239,7 +248,7 @@ export class SessionService {
       return null;
     }
 
-    session.history.push({ timestamp: new Date().toISOString(), action });
+    session.history.push({ timestamp: new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Seoul' }).replace(' ', 'T'), action });
     const updated = await this.sessionRepository.save(session);
 
     // 캐시 갱신

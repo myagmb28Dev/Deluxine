@@ -1,14 +1,23 @@
+process.env.TZ = 'Asia/Seoul';
+
 import { NestFactory, HttpAdapterHost } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
+import { json, urlencoded } from 'express';
 import { AppModule } from './app.module';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, {
+    logger: ['error', 'warn', 'log'],
+  });
+
   const configService = app.get(ConfigService);
   const httpAdapter = app.get(HttpAdapterHost);
+
+  app.use(json({ limit: '8mb' }));
+  app.use(urlencoded({ extended: true, limit: '8mb' }));
 
   app.useGlobalPipes(
     new ValidationPipe({
@@ -31,8 +40,8 @@ async function bootstrap() {
     .addBearerAuth({
       type: 'http',
       scheme: 'bearer',
-      bearerFormat: 'JWT',
-      description: 'JWT 토큰 (Authorization: Bearer <token>)',
+      bearerFormat: 'Firebase',
+      description: 'Firebase ID Token (Authorization: Bearer <token>)',
     }, 'access-token')
     .build();
 

@@ -30,7 +30,10 @@ export class AllExceptionsFilter implements ExceptionFilter {
         ? exception.message
         : 'Internal server error occurred');
 
-    const logLine = `HTTP Status: ${httpStatus} Error Message: ${Array.isArray(errorMessage) ? errorMessage.join(', ') : errorMessage}`;
+    const request = ctx.getRequest();
+    const requestPath = httpAdapter.getRequestUrl(request);
+    const requestMethod = request.method ?? 'UNKNOWN';
+    const logLine = `[${requestMethod} ${requestPath}] HTTP Status: ${httpStatus} Error Message: ${Array.isArray(errorMessage) ? errorMessage.join(', ') : errorMessage}`;
     if (httpStatus >= 500) {
       this.logger.error(
         logLine,

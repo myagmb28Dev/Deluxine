@@ -17,7 +17,7 @@ export interface PoseModel {
 type JointGuideItem = {
   name: string;
   label: string;
-  group: 'head' | 'torso' | 'left_arm' | 'right_arm' | 'left_leg' | 'right_leg' | 'left_hand' | 'right_hand' | 'left_foot' | 'right_foot';
+  group: 'head' | 'face' | 'torso' | 'left_arm' | 'right_arm' | 'left_leg' | 'right_leg' | 'left_hand' | 'right_hand' | 'left_foot' | 'right_foot';
   color: string;
 };
 
@@ -37,19 +37,58 @@ export class PoseService {
     private readonly poseQueue: Queue,
   ) {}
 
-  async generate(sessionId: string) {
+  async generate(sessionId: string, targetRatio?: number, force = false) {
+    const cachedStatus = await this.redisService.get<string>(RedisKeys.sessionCurrentPose(sessionId));
+    if (!force && (cachedStatus === 'pending' || cachedStatus === 'generating')) {
+      return {
+        status: 'pending' as const,
+        message: 'Pose generation is already in progress.',
+        sessionId,
+        enqueued: false,
+      };
+    }
+
+    const existingPose = await this.findBySessionId(sessionId);
+    if (!force && existingPose) {
+      return {
+        status: 'completed' as const,
+        message: 'Pose already exists for this session. Use force=true to regenerate.',
+        sessionId,
+        pose_id: existingPose.id,
+        enqueued: false,
+      };
+    }
+
+    const existingJob = await this.poseQueue.getJob(`pose-${sessionId}`);
+    if (existingJob) {
+      const state = await existingJob.getState();
+      if (!force && ['waiting', 'active', 'delayed', 'prioritized'].includes(state)) {
+        return {
+          status: 'pending' as const,
+          message: 'Pose generation is already in progress.',
+          sessionId,
+          enqueued: false,
+        };
+      }
+      if (force && ['waiting', 'active', 'delayed', 'prioritized'].includes(state)) {
+        await existingJob.remove();
+      }
+    }
+
     // 1. 세션에서 선화 URL 조회
     const session = await this.sessionService.findById(sessionId);
     const lineArtUrl = session?.lineArtUrl || 'line.png';
 
-    // 2. 상태 설정 (대기 중)
+    // 2. 상태 설정 (대기 중) 및 진행률 초기화
     await this.redisService.set(RedisKeys.sessionCurrentPose(sessionId), 'pending', 600);
+    await this.redisService.set(RedisKeys.poseProgress(sessionId), 0, 600);
 
     // 3. 비동기 작업 큐에 등록
-    this.logger.log(`Enqueuing pose generation for session ${sessionId}`);
+    this.logger.log(`Enqueuing pose generation for session ${sessionId} (targetRatio: ${targetRatio})`);
     await this.poseQueue.add('generate-pose', {
       sessionId,
       lineArtUrl,
+      targetRatio: targetRatio || 0,
     }, {
       jobId: `pose-${sessionId}`,
       attempts: 3,
@@ -63,10 +102,23 @@ export class PoseService {
       status: 'pending',
       message: 'Pose generation has been enqueued. Please check back later.',
       sessionId,
+      enqueued: true,
     };
   }
 
-  async update(sessionId: string, keypoints: Array<{ name: string; x: number; y: number; z?: number; confidence?: number }>) {
+  async update(
+    sessionId: string,
+    keypoints: Array<{ name: string; x: number; y: number; z?: number; confidence?: number }>,
+    editorState?: {
+      version: string;
+      wholeTransform: {
+        position: [number, number, number];
+        quaternion: [number, number, number, number];
+        scale: [number, number, number];
+      };
+      bones: Record<string, { quaternion: [number, number, number, number] }>;
+    },
+  ) {
     // 임시 키포인트 저장 (DB 저장 전)
     await this.redisService.set(RedisKeys.tempPoseKeypoints(sessionId), keypoints, this.TEMP_TTL);
 
@@ -83,6 +135,7 @@ export class PoseService {
       ...(typeof kp.z !== 'undefined' ? { z: kp.z } : {}),
       confidence: typeof kp.confidence !== 'undefined' ? kp.confidence : 1.0,
     }));
+    pose.editorState = editorState ?? pose.editorState ?? null;
     const updated = await this.poseRepository.save(pose);
 
     // 캐시 갱신 및 임시 데이터 삭제
@@ -158,6 +211,12 @@ export class PoseService {
   getGuide() {
     const joints: JointGuideItem[] = [
       { name: 'head', label: '머리', group: 'head', color: '#A855F7' },
+      { name: 'face_center', label: '얼굴 중심', group: 'face', color: '#C084FC' },
+      { name: 'left_eye', label: '왼눈', group: 'face', color: '#C084FC' },
+      { name: 'right_eye', label: '오른눈', group: 'face', color: '#C084FC' },
+      { name: 'nose', label: '코', group: 'face', color: '#C084FC' },
+      { name: 'mouth_left', label: '입 왼쪽', group: 'face', color: '#C084FC' },
+      { name: 'mouth_right', label: '입 오른쪽', group: 'face', color: '#C084FC' },
       { name: 'neck', label: '목', group: 'head', color: '#A855F7' },
       { name: 'chest', label: '가슴', group: 'torso', color: '#10B981' },
       { name: 'abdomen', label: '복부', group: 'torso', color: '#10B981' },
@@ -185,20 +244,29 @@ export class PoseService {
       { name: 'left_hip', label: '왼쪽 골반', group: 'left_leg', color: '#3B82F6' },
       { name: 'left_knee', label: '왼쪽 무릎', group: 'left_leg', color: '#3B82F6' },
       { name: 'left_ankle', label: '왼쪽 발목', group: 'left_leg', color: '#3B82F6' },
-      { name: 'left_foot', label: '왼쪽 발끝', group: 'left_leg', color: '#3B82F6' },
-      { name: 'left_toe', label: '왼쪽 발가락', group: 'left_foot', color: '#06B6D4' },
+      { name: 'left_foot', label: '왼쪽 발바닥', group: 'left_leg', color: '#3B82F6' },
+      { name: 'left_big_toe', label: '왼쪽 엄지발가락', group: 'left_foot', color: '#06B6D4' },
+      { name: 'left_index_toe', label: '왼쪽 검지발가락', group: 'left_foot', color: '#06B6D4' },
+      { name: 'left_middle_toe', label: '왼쪽 중지발가락', group: 'left_foot', color: '#06B6D4' },
+      { name: 'left_ring_toe', label: '왼쪽 약지발가락', group: 'left_foot', color: '#06B6D4' },
+      { name: 'left_pinky_toe', label: '왼쪽 새끼발가락', group: 'left_foot', color: '#06B6D4' },
 
       { name: 'right_hip', label: '오른쪽 골반', group: 'right_leg', color: '#2563EB' },
       { name: 'right_knee', label: '오른쪽 무릎', group: 'right_leg', color: '#2563EB' },
       { name: 'right_ankle', label: '오른쪽 발목', group: 'right_leg', color: '#2563EB' },
-      { name: 'right_foot', label: '오른쪽 발끝', group: 'right_leg', color: '#2563EB' },
-      { name: 'right_toe', label: '오른쪽 발가락', group: 'right_foot', color: '#0891B2' },
+      { name: 'right_foot', label: '오른쪽 발바닥', group: 'right_leg', color: '#2563EB' },
+      { name: 'right_big_toe', label: '오른쪽 엄지발가락', group: 'right_foot', color: '#0891B2' },
+      { name: 'right_index_toe', label: '오른쪽 검지발가락', group: 'right_foot', color: '#0891B2' },
+      { name: 'right_middle_toe', label: '오른쪽 중지발가락', group: 'right_foot', color: '#0891B2' },
+      { name: 'right_ring_toe', label: '오른쪽 약지발가락', group: 'right_foot', color: '#0891B2' },
+      { name: 'right_pinky_toe', label: '오른쪽 새끼발가락', group: 'right_foot', color: '#0891B2' },
     ];
 
     return {
       version: '1.0',
       groups: {
         head: { label: '머리/목', color: '#A855F7' },
+        face: { label: '얼굴', color: '#C084FC' },
         torso: { label: '몸통', color: '#10B981' },
         left_arm: { label: '왼팔', color: '#EF4444' },
         right_arm: { label: '오른팔', color: '#F43F5E' },
@@ -214,7 +282,7 @@ export class PoseService {
         defaultMode: 'core_only',
         advancedToggle: {
           hand: ['left_thumb', 'left_index', 'left_middle', 'left_ring', 'left_pinky', 'right_thumb', 'right_index', 'right_middle', 'right_ring', 'right_pinky'],
-          foot: ['left_toe', 'right_toe'],
+          foot: ['left_big_toe', 'left_index_toe', 'left_middle_toe', 'left_ring_toe', 'left_pinky_toe', 'right_big_toe', 'right_index_toe', 'right_middle_toe', 'right_ring_toe', 'right_pinky_toe'],
         },
       },
     };
@@ -224,6 +292,12 @@ export class PoseService {
     return {
       edges: [
         ['head', 'neck'],
+        ['head', 'face_center'],
+        ['face_center', 'left_eye'],
+        ['face_center', 'right_eye'],
+        ['face_center', 'nose'],
+        ['nose', 'mouth_left'],
+        ['nose', 'mouth_right'],
         ['neck', 'chest'],
         ['chest', 'abdomen'],
         ['abdomen', 'spine'],
@@ -231,34 +305,65 @@ export class PoseService {
         ['neck', 'left_shoulder'],
         ['left_shoulder', 'left_elbow'],
         ['left_elbow', 'left_wrist'],
+        ['left_wrist', 'left_thumb'],
+        ['left_wrist', 'left_index'],
+        ['left_wrist', 'left_middle'],
+        ['left_wrist', 'left_ring'],
+        ['left_wrist', 'left_pinky'],
         ['neck', 'right_shoulder'],
         ['right_shoulder', 'right_elbow'],
         ['right_elbow', 'right_wrist'],
+        ['right_wrist', 'right_thumb'],
+        ['right_wrist', 'right_index'],
+        ['right_wrist', 'right_middle'],
+        ['right_wrist', 'right_ring'],
+        ['right_wrist', 'right_pinky'],
         ['pelvis', 'left_hip'],
         ['left_hip', 'left_knee'],
         ['left_knee', 'left_ankle'],
         ['left_ankle', 'left_foot'],
+        ['left_foot', 'left_big_toe'],
+        ['left_foot', 'left_index_toe'],
+        ['left_foot', 'left_middle_toe'],
+        ['left_foot', 'left_ring_toe'],
+        ['left_foot', 'left_pinky_toe'],
         ['pelvis', 'right_hip'],
         ['right_hip', 'right_knee'],
         ['right_knee', 'right_ankle'],
         ['right_ankle', 'right_foot'],
+        ['right_foot', 'right_big_toe'],
+        ['right_foot', 'right_index_toe'],
+        ['right_foot', 'right_middle_toe'],
+        ['right_foot', 'right_ring_toe'],
+        ['right_foot', 'right_pinky_toe'],
       ],
       left_right_pairs: [
+        ['left_eye', 'right_eye'],
         ['left_shoulder', 'right_shoulder'],
         ['left_elbow', 'right_elbow'],
         ['left_wrist', 'right_wrist'],
+        ['left_thumb', 'right_thumb'],
+        ['left_index', 'right_index'],
+        ['left_middle', 'right_middle'],
+        ['left_ring', 'right_ring'],
+        ['left_pinky', 'right_pinky'],
         ['left_hip', 'right_hip'],
         ['left_knee', 'right_knee'],
         ['left_ankle', 'right_ankle'],
         ['left_foot', 'right_foot'],
+        ['left_big_toe', 'right_big_toe'],
+        ['left_index_toe', 'right_index_toe'],
+        ['left_middle_toe', 'right_middle_toe'],
+        ['left_ring_toe', 'right_ring_toe'],
+        ['left_pinky_toe', 'right_pinky_toe'],
       ],
       groups: {
         head: ['head', 'neck'],
-        face: [],
+        face: ['face_center', 'left_eye', 'right_eye', 'nose', 'mouth_left', 'mouth_right'],
         torso: ['chest', 'abdomen', 'spine', 'pelvis'],
         arm: ['left_shoulder', 'left_elbow', 'left_wrist', 'right_shoulder', 'right_elbow', 'right_wrist'],
         hand: ['left_thumb', 'left_index', 'left_middle', 'left_ring', 'left_pinky', 'right_thumb', 'right_index', 'right_middle', 'right_ring', 'right_pinky'],
-        leg: ['left_hip', 'left_knee', 'left_ankle', 'left_foot', 'right_hip', 'right_knee', 'right_ankle', 'right_foot'],
+        leg: ['left_hip', 'left_knee', 'left_ankle', 'left_foot', 'left_big_toe', 'left_index_toe', 'left_middle_toe', 'left_ring_toe', 'left_pinky_toe', 'right_hip', 'right_knee', 'right_ankle', 'right_foot', 'right_big_toe', 'right_index_toe', 'right_middle_toe', 'right_ring_toe', 'right_pinky_toe'],
       },
     };
   }

@@ -3,75 +3,121 @@ import { Job } from 'bullmq';
 import { Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { ConfigService } from '@nestjs/config';
 import { Pose } from '../../entities/pose.entity';
 import { RedisService } from '../redis/redis.service';
 import { RedisKeys } from '../redis/redis.keys';
-import axios from 'axios';
+
+type CanonicalKeypoint = {
+  name: string;
+  x: number;
+  y: number;
+  z?: number;
+  confidence: number;
+};
 
 @Processor('pose')
 export class PoseProcessor extends WorkerHost {
   private readonly logger = new Logger(PoseProcessor.name);
-  private readonly CACHE_TTL = 1800; // 30분
+  private readonly CACHE_TTL = 1800;
 
   constructor(
     @InjectRepository(Pose)
     private readonly poseRepository: Repository<Pose>,
     private readonly redisService: RedisService,
-    private readonly configService: ConfigService,
   ) {
     super();
   }
 
-  async process(job: Job<{ sessionId: string; lineArtUrl: string }>): Promise<any> {
-    const { sessionId, lineArtUrl } = job.data;
-    this.logger.log(`Processing pose extraction for session: ${sessionId}`);
+  async process(job: Job<{ sessionId: string; lineArtUrl: string; targetRatio?: number }>): Promise<any> {
+    const { sessionId, targetRatio } = job.data;
+    this.logger.log(`Generating pose for session: ${sessionId}`);
 
     try {
       await this.redisService.set(RedisKeys.sessionCurrentPose(sessionId), 'generating', 600);
       await this.redisService.set(RedisKeys.poseProgress(sessionId), 10, 600);
 
-      // 1. Python 3D AI 엔진 호출을 위한 절대 경로 생성
-      const baseUrl = this.configService.get<string>('app.baseUrl');
-      const absoluteUrl = lineArtUrl.startsWith('http') 
-        ? lineArtUrl 
-        : `${baseUrl}${lineArtUrl.startsWith('/') ? '' : '/'}${lineArtUrl}`;
+      const keypoints = this.createFallbackKeypoints(targetRatio);
+      const sourceLabel = 'default_template_pose';
 
-      const aiUrl = this.configService.get<string>('AI_POSE_ENGINE_URL');
-      if (!aiUrl) {
-        throw new Error('AI_POSE_ENGINE_URL is not defined in the environment variables.');
-      }
-      
-      this.logger.log(`Calling AI Pose Engine at ${aiUrl} with imageUrl: ${absoluteUrl}`);
-      const { data } = await axios.post(aiUrl, { imageUrl: absoluteUrl });
-      
-      await this.redisService.set(RedisKeys.poseProgress(sessionId), 50, 600);
+      await this.redisService.set(RedisKeys.poseProgress(sessionId), 85, 600);
 
-      // 2. 받은 3D 데이터(z값 포함)를 DB에 저장
-      const pose = this.poseRepository.create({
-        sessionId,
-        label: data.label,
-        keypoints: data.keypoints,
-      });
+      const existing = await this.poseRepository.findOne({ where: { sessionId } });
+      const pose = existing ?? this.poseRepository.create({ sessionId });
+      pose.label = sourceLabel;
+      pose.keypoints = keypoints;
+      pose.detectedRatio = targetRatio ?? null;
+
       const saved = await this.poseRepository.save(pose);
 
-      // 3. 캐시 갱신 및 완료 처리
       await this.redisService.set(RedisKeys.poseCache(sessionId), saved, this.CACHE_TTL);
-      await this.redisService.set(RedisKeys.sessionCurrentPose(sessionId), saved.id, this.CACHE_TTL);
       await this.redisService.set(RedisKeys.poseProgress(sessionId), 100, 600);
-      
-      this.logger.log(`Successfully extracted and saved pose for session ${sessionId}`);
+      await this.redisService.set(RedisKeys.sessionCurrentPose(sessionId), saved.id, this.CACHE_TTL);
+
+      this.logger.log(`Pose generated successfully for session ${sessionId}`);
       return saved;
     } catch (error) {
-      const errorMessage = error.response?.data?.detail || error.message;
-      this.logger.error(`Pose extraction failed for session ${sessionId}: ${errorMessage}`);
-      if (error.response?.data) {
-        this.logger.error(`Error details: ${JSON.stringify(error.response.data)}`);
-      }
-      
+      this.logger.error(`Failed to generate pose: ${error.message}`);
       await this.redisService.set(RedisKeys.sessionCurrentPose(sessionId), 'failed', 600);
-      await this.redisService.set(RedisKeys.poseProgress(sessionId), -1, 600); // -1 = 실패
       throw error;
     }
+  }
+
+  private createFallbackKeypoints(targetRatio?: number): CanonicalKeypoint[] {
+    const ratioFactor = targetRatio && targetRatio > 0 ? Math.min(1.2, Math.max(0.8, 7 / targetRatio)) : 1;
+    const legY = 0.88 * ratioFactor;
+
+    return [
+      { name: 'head', x: 0.5, y: 0.12, confidence: 1 },
+      { name: 'face_center', x: 0.5, y: 0.15, confidence: 1 },
+      { name: 'left_eye', x: 0.485, y: 0.14, confidence: 1 },
+      { name: 'right_eye', x: 0.515, y: 0.14, confidence: 1 },
+      { name: 'nose', x: 0.5, y: 0.16, confidence: 1 },
+      { name: 'mouth_left', x: 0.492, y: 0.18, confidence: 1 },
+      { name: 'mouth_right', x: 0.508, y: 0.18, confidence: 1 },
+
+      { name: 'neck', x: 0.5, y: 0.22, confidence: 1 },
+      { name: 'chest', x: 0.5, y: 0.30, confidence: 1 },
+      { name: 'abdomen', x: 0.5, y: 0.39, confidence: 1 },
+      { name: 'spine', x: 0.5, y: 0.45, confidence: 1 },
+      { name: 'pelvis', x: 0.5, y: 0.52, confidence: 1 },
+
+      { name: 'left_shoulder', x: 0.43, y: 0.27, confidence: 1 },
+      { name: 'left_elbow', x: 0.39, y: 0.39, confidence: 1 },
+      { name: 'left_wrist', x: 0.36, y: 0.50, confidence: 1 },
+      { name: 'left_thumb', x: 0.35, y: 0.53, confidence: 1 },
+      { name: 'left_index', x: 0.355, y: 0.55, confidence: 1 },
+      { name: 'left_middle', x: 0.36, y: 0.56, confidence: 1 },
+      { name: 'left_ring', x: 0.365, y: 0.55, confidence: 1 },
+      { name: 'left_pinky', x: 0.37, y: 0.54, confidence: 1 },
+
+      { name: 'right_shoulder', x: 0.57, y: 0.27, confidence: 1 },
+      { name: 'right_elbow', x: 0.61, y: 0.39, confidence: 1 },
+      { name: 'right_wrist', x: 0.64, y: 0.50, confidence: 1 },
+      { name: 'right_thumb', x: 0.65, y: 0.53, confidence: 1 },
+      { name: 'right_index', x: 0.645, y: 0.55, confidence: 1 },
+      { name: 'right_middle', x: 0.64, y: 0.56, confidence: 1 },
+      { name: 'right_ring', x: 0.635, y: 0.55, confidence: 1 },
+      { name: 'right_pinky', x: 0.63, y: 0.54, confidence: 1 },
+
+      { name: 'left_hip', x: 0.46, y: 0.53, confidence: 1 },
+      { name: 'left_knee', x: 0.45, y: 0.70, confidence: 1 },
+      { name: 'left_ankle', x: 0.45, y: legY, confidence: 1 },
+      { name: 'left_foot', x: 0.45, y: 0.92, confidence: 1 },
+      { name: 'left_big_toe', x: 0.44, y: 0.95, confidence: 1 },
+      { name: 'left_index_toe', x: 0.445, y: 0.95, confidence: 1 },
+      { name: 'left_middle_toe', x: 0.45, y: 0.95, confidence: 1 },
+      { name: 'left_ring_toe', x: 0.455, y: 0.95, confidence: 1 },
+      { name: 'left_pinky_toe', x: 0.46, y: 0.95, confidence: 1 },
+
+      { name: 'right_hip', x: 0.54, y: 0.53, confidence: 1 },
+      { name: 'right_knee', x: 0.55, y: 0.70, confidence: 1 },
+      { name: 'right_ankle', x: 0.55, y: legY, confidence: 1 },
+      { name: 'right_foot', x: 0.55, y: 0.92, confidence: 1 },
+      { name: 'right_big_toe', x: 0.54, y: 0.95, confidence: 1 },
+      { name: 'right_index_toe', x: 0.545, y: 0.95, confidence: 1 },
+      { name: 'right_middle_toe', x: 0.55, y: 0.95, confidence: 1 },
+      { name: 'right_ring_toe', x: 0.555, y: 0.95, confidence: 1 },
+      { name: 'right_pinky_toe', x: 0.56, y: 0.95, confidence: 1 },
+    ];
   }
 }
