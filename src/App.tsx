@@ -1,17 +1,14 @@
-﻿import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useSearchParams } from 'react-router-dom';
 import { Sidebar } from './components/layout/Sidebar';
 import { PromptBar } from './components/layout/PromptBar';
-import { CanvasEditor } from './components/editor/CanvasEditor';
+import { CanvasEditor, type CanvasEditorHandle } from './components/editor/CanvasEditor';
 import { LoginView } from './components/auth/LoginView';
-import { ProgressBar } from './components/common/ProgressBar';
-import CallbackPage from './pages/auth/CallbackPage';
 import { usePoseEditor } from './hooks/usePoseEditor';
 import { useAuth } from './hooks/useAuth';
 import { sessionApi, poseApi, renderApi } from './api/client';
-import { getAuthStore } from './lib/authStore';
 import type { PipelineStatus, Keypoint } from './types';
-import type { PoseGuideJoint, PoseTopologyResponse, SessionListItem } from './types/api';
+import type { PoseEditorState, PoseGuideResponse, PoseTopologyResponse, SessionListItem } from './types/api';
 import { AnimatePresence, motion } from 'framer-motion';
 
 type SessionOverrides = Record<string, { title?: string; hidden?: boolean }>;
@@ -31,58 +28,20 @@ const saveSessionOverrides = (overrides: SessionOverrides) => {
   localStorage.setItem(SESSION_OVERRIDES_KEY, JSON.stringify(overrides));
 };
 
-const CANVAS_WIDTH = 600;
-const CANVAS_HEIGHT = 800;
-
-// Backend uses 1024x1024 as its internal coordinate system
-const SERVER_WIDTH = 1024;
-const SERVER_HEIGHT = 1024;
-
-const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
-
-const toDisplayKeypoints = (kps: Keypoint[], coordinateMode?: 'normalized' | 'pixel') => {
-  if (coordinateMode === 'normalized') {
-    return {
-      mode: 'normalized' as const,
-      keypoints: kps.map((kp) => ({ ...kp, x: clamp01(kp.x), y: clamp01(kp.y) })),
-    };
-  }
-
-  if (coordinateMode === 'pixel') {
-    return {
-      mode: 'pixel' as const,
-      keypoints: kps.map((kp) => ({
-        ...kp,
-        x: clamp01(kp.x / SERVER_WIDTH),
-        y: clamp01(kp.y / SERVER_HEIGHT),
-      })),
-    };
-  }
-
-  const isPixelBased = kps.some((kp) => kp.x > 1 || kp.y > 1);
-  if (!isPixelBased) {
-    return {
-      mode: 'normalized' as const,
-      keypoints: kps.map((kp) => ({ ...kp, x: clamp01(kp.x), y: clamp01(kp.y) })),
-    };
-  }
-  return {
-    mode: 'pixel' as const,
-    keypoints: kps.map((kp) => ({
-      ...kp,
-      x: clamp01(kp.x / SERVER_WIDTH),
-      y: clamp01(kp.y / SERVER_HEIGHT),
-    })),
-  };
-};
-
-const toApiKeypoints = (kps: Keypoint[], mode: 'normalized' | 'pixel') => {
-  if (mode === 'normalized') return kps;
+// Backend uses normalized coordinates (0.0 ~ 1.0)
+const toDisplayKeypoints = (kps: Keypoint[]) => {
   return kps.map((kp) => ({
     ...kp,
-    x: kp.x * SERVER_WIDTH,
-    y: kp.y * SERVER_HEIGHT,
+    x: kp.x,
+    y: kp.y,
+    z: kp.z ?? 0,
+    confidence: kp.confidence ?? 1.0
   }));
+};
+
+const toApiKeypoints = (kps: Keypoint[]) => {
+  // 백엔드 가이드 v3.0에 따라 0.0 ~ 1.0 정규화 좌표를 그대로 전달
+  return kps;
 };
 
 const resolveAssetUrl = (url: string | null) => {
@@ -91,9 +50,23 @@ const resolveAssetUrl = (url: string | null) => {
   return url;
 };
 
-const hasAuthSession = () => {
-  const auth = getAuthStore();
-  return !!auth?.accessToken;
+const toKstDisplayTimestamp = (isoLike: string) => {
+  const parsed = new Date(isoLike);
+  if (Number.isNaN(parsed.getTime())) {
+    return isoLike;
+  }
+
+  const formatter = new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+
+  return formatter.format(parsed).replace(' ', 'T') + '+09:00';
 };
 
 const AppContent: React.FC = () => {
@@ -104,13 +77,21 @@ const AppContent: React.FC = () => {
   const [prompt, setPrompt] = useState('');
   const [finalImage, setFinalImage] = useState<string | null>(null);
   const [lineArtImage, setLineArtImage] = useState<string | null>(null);
+  const [renderErrorMessage, setRenderErrorMessage] = useState<string | null>(null);
   const [initialKps, setInitialKps] = useState<Keypoint[]>([]);
-  const [poseCoordinateMode, setPoseCoordinateMode] = useState<'normalized' | 'pixel'>('normalized');
+  const [initialEditorState, setInitialEditorState] = useState<PoseEditorState | null>(null);
   const [progress, setProgress] = useState(0);
-  const [jointGuides, setJointGuides] = useState<PoseGuideJoint[]>([]);
   const [poseTopology, setPoseTopology] = useState<PoseTopologyResponse | null>(null);
+  const [poseGuide, setPoseGuide] = useState<PoseGuideResponse | null>(null);
   const [recentSessions, setRecentSessions] = useState<SessionListItem[]>([]);
   const [sessionOverrides, setSessionOverrides] = useState<SessionOverrides>(() => loadSessionOverrides());
+  const eventSourceRef = useRef<EventSource | null>(null);
+  const statusPollRef = useRef<number | null>(null);
+  const canvasEditorRef = useRef<CanvasEditorHandle | null>(null);
+  const saveInFlightRef = useRef(false);
+  const pendingPoseRef = useRef<Keypoint[] | null>(null);
+  const latestEditorStateRef = useRef<PoseEditorState | null>(null);
+  const lastSavedPoseSignatureRef = useRef<string | null>(null);
 
   const sessionPanelItems = React.useMemo(
     () => recentSessions
@@ -126,71 +107,192 @@ const AppContent: React.FC = () => {
     [recentSessions, sessionOverrides],
   );
 
-  const { keypoints, draggingIdx, handleStart, handleMove, handleEnd, scaleAll } = usePoseEditor(
+  // usePoseEditor에 전달할 콜백을 메모이제이션하여 불필요한 재생성 방지
+  const handlePoseUpdate = React.useCallback((kps: Keypoint[]) => {
+    if (!sessionId) return;
+
+    const payload = {
+      keypoints: toApiKeypoints(kps),
+      editorState: latestEditorStateRef.current ?? null,
+    };
+    const signature = JSON.stringify(payload);
+    if (lastSavedPoseSignatureRef.current === signature) {
+      return;
+    }
+
+    pendingPoseRef.current = payload.keypoints;
+
+    const flushPoseSave = async () => {
+      if (saveInFlightRef.current || !pendingPoseRef.current) return;
+
+      const nextPayload = pendingPoseRef.current;
+      const nextEditorState = latestEditorStateRef.current ?? null;
+      const nextSignature = JSON.stringify({
+        keypoints: nextPayload,
+        editorState: nextEditorState,
+      });
+      if (lastSavedPoseSignatureRef.current === nextSignature) {
+        pendingPoseRef.current = null;
+        return;
+      }
+
+      saveInFlightRef.current = true;
+      pendingPoseRef.current = null;
+
+      try {
+        await poseApi.update(sessionId, nextPayload, nextEditorState);
+        lastSavedPoseSignatureRef.current = nextSignature;
+      } catch (error) {
+        console.warn('[App] pose sync failed:', error);
+        pendingPoseRef.current = nextPayload;
+      } finally {
+        saveInFlightRef.current = false;
+        if (pendingPoseRef.current) {
+          void flushPoseSave();
+        }
+      }
+    };
+
+    void flushPoseSave();
+  }, [sessionId]);
+
+  const { keypoints, handleUpdateKeypoint3D } = usePoseEditor(
     initialKps,
-    (kps) => { if (sessionId) poseApi.update(sessionId, toApiKeypoints(kps, poseCoordinateMode)); }
+    handlePoseUpdate
   );
 
   const resetWorkspace = React.useCallback(() => {
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+    if (statusPollRef.current) {
+      window.clearInterval(statusPollRef.current);
+      statusPollRef.current = null;
+    }
     setSessionId(null);
     setStatus('idle');
     setPrompt('');
     setFinalImage(null);
     setLineArtImage(null);
+    setRenderErrorMessage(null);
     setInitialKps([]);
-    setPoseCoordinateMode('normalized');
+    setInitialEditorState(null);
     setProgress(0);
-    setJointGuides([]);
     setPoseTopology(null);
+    setPoseGuide(null);
+    pendingPoseRef.current = null;
+    latestEditorStateRef.current = null;
+    lastSavedPoseSignatureRef.current = null;
+    saveInFlightRef.current = false;
   }, []);
 
+  const applyLoadedPose = React.useCallback((pose: { keypoints?: Keypoint[]; editorState?: PoseEditorState | null } | null) => {
+    const rawKeypoints = pose?.keypoints || [];
+    const converted = toDisplayKeypoints(rawKeypoints as Keypoint[]);
+    const loadedEditorState = pose?.editorState ?? null;
+    latestEditorStateRef.current = loadedEditorState;
+    setInitialEditorState(loadedEditorState);
+    lastSavedPoseSignatureRef.current = JSON.stringify({
+      keypoints: toApiKeypoints(converted),
+      editorState: loadedEditorState,
+    });
+    pendingPoseRef.current = null;
+    setInitialKps(converted);
+    setProgress(100);
+    setStatus('editing');
+  }, []);
+
+  const stopStatusPolling = React.useCallback(() => {
+    if (statusPollRef.current) {
+      window.clearInterval(statusPollRef.current);
+      statusPollRef.current = null;
+    }
+  }, []);
+
+  const startStatusPolling = React.useCallback((sid: string) => {
+    stopStatusPolling();
+    statusPollRef.current = window.setInterval(async () => {
+      try {
+        const poseStatus = await poseApi.getStatus(sid);
+        if (poseStatus.status === 'pending' || poseStatus.status === 'generating') {
+          setProgress(poseStatus.progress || 0);
+          setStatus('analyzing');
+          return;
+        }
+
+        if (poseStatus.status === 'completed') {
+          const pose = await poseApi.getById(poseStatus.pose_id);
+          applyLoadedPose(pose as { keypoints?: Keypoint[] });
+          stopStatusPolling();
+          if (eventSourceRef.current) {
+            eventSourceRef.current.close();
+            eventSourceRef.current = null;
+          }
+          return;
+        }
+
+        if (poseStatus.status === 'failed') {
+          setStatus('failed');
+          stopStatusPolling();
+        }
+      } catch {
+        // keep polling; transient network errors should not force a hard failure
+      }
+    }, 1500);
+  }, [applyLoadedPose, stopStatusPolling]);
+
   const restoreSession = React.useCallback(async (targetSessionId: string) => {
-    if (!hasAuthSession()) return;
+    if (!isLoggedIn) return;
 
     try {
       const session = await sessionApi.getById(targetSessionId);
       setSessionId(session.id);
       setLineArtImage(resolveAssetUrl(session.lineArtUrl));
       setFinalImage(null);
+      setRenderErrorMessage(null);
       setPrompt('');
       setProgress(0);
 
+      // Load topology & guide
       try {
-        const guide = await poseApi.getGuide(session.id);
-        setJointGuides(guide.joints);
-      } catch (guideError) {
-        console.warn('Failed to load pose guide:', guideError);
-        setJointGuides([]);
-      }
-
-      try {
-        const topology = await poseApi.getTopology(session.id);
+        const [topology, guide] = await Promise.all([
+          poseApi.getTopology(session.id),
+          poseApi.getGuide(session.id)
+        ]);
         setPoseTopology(topology);
-      } catch (topologyError) {
-        console.warn('Failed to load pose topology:', topologyError);
-        setPoseTopology(null);
+        setPoseGuide(guide);
+      } catch (err) {
+        console.warn('Failed to load pose metadata:', err);
       }
 
       try {
         const pose = await poseApi.getCurrent(session.id);
-        const converted = toDisplayKeypoints((pose.keypoints || []) as Keypoint[], pose.coordinateMode);
-        setPoseCoordinateMode(converted.mode);
-        setInitialKps(converted.keypoints);
-        setStatus('editing');
-      } catch {
+        console.log('[App] Current Pose Data:', pose);
+        applyLoadedPose(pose as { keypoints?: Keypoint[] });
+      } catch (err) {
+        console.warn('[App] No current pose found, checking status...');
         try {
           const poseStatus = await poseApi.getStatus(session.id);
           if (poseStatus.status === 'generating' || poseStatus.status === 'pending') {
             setInitialKps([]);
+            setInitialEditorState(null);
             setProgress(poseStatus.progress || 0);
             setStatus('analyzing');
-            pollPoseStatus(session.id);
+            subscribeToSessionEvents(session.id);
+            startStatusPolling(session.id);
+          } else if (poseStatus.status === 'completed') {
+            const pose = await poseApi.getById(poseStatus.pose_id);
+            applyLoadedPose(pose as { keypoints?: Keypoint[] });
           } else {
             setInitialKps([]);
+            setInitialEditorState(null);
             setStatus('idle');
           }
-        } catch {
+        } catch (innerErr) {
+          console.error('[App] Failed to load pose status:', innerErr);
           setInitialKps([]);
+          setInitialEditorState(null);
           setStatus('idle');
         }
       }
@@ -198,7 +300,7 @@ const AppContent: React.FC = () => {
       console.warn('Failed to restore session:', sessionError);
       resetWorkspace();
     }
-  }, [resetWorkspace]);
+  }, [applyLoadedPose, isLoggedIn, resetWorkspace, startStatusPolling]);
 
   // Load session list when logged in
   React.useEffect(() => {
@@ -262,7 +364,7 @@ const AppContent: React.FC = () => {
   }, [isLoggedIn, isAuthLoading, restoreSession, searchParams, sessionId]);
 
   const startSession = async (file: File) => {
-    if (!hasAuthSession()) {
+    if (!isLoggedIn) {
       setStatus('idle');
       return;
     }
@@ -271,71 +373,140 @@ const AppContent: React.FC = () => {
       setProgress(0);
       setStatus('analyzing');
       setFinalImage(null);
+      setRenderErrorMessage(null);
+      setInitialKps([]);
+      setInitialEditorState(null);
+      latestEditorStateRef.current = null;
+      lastSavedPoseSignatureRef.current = null;
       const session = await sessionApi.create(file);
+      
+      // 새 세션을 최근 목록에 즉시 추가 (KST 강제 보정)
+      const nowKst = toKstDisplayTimestamp(new Date().toISOString());
+      const newSessionItem: SessionListItem = { 
+        id: session.id, 
+        title: session.title || '새 세션', 
+        createdAt: session.createdAt ? toKstDisplayTimestamp(session.createdAt) : nowKst, 
+        updatedAt: session.updatedAt ? toKstDisplayTimestamp(session.updatedAt) : nowKst
+      };
+
+      setRecentSessions((prev) => [newSessionItem, ...prev].slice(0, 5));
+
       setSessionId(session.id);
       setSearchParams({ sessionId: session.id });
       setLineArtImage(resolveAssetUrl(session.lineArtUrl));
       
-      // Load joint guides
+      // Load topology & guide
       try {
-        const guide = await poseApi.getGuide(session.id);
-        setJointGuides(guide.joints);
-      } catch (err) {
-        console.warn('Failed to load pose guide:', err);
-        setJointGuides([]);
-      }
-
-      // Load topology
-      try {
-        const topology = await poseApi.getTopology(session.id);
+        const [topology, guide] = await Promise.all([
+          poseApi.getTopology(session.id),
+          poseApi.getGuide(session.id)
+        ]);
         setPoseTopology(topology);
+        setPoseGuide(guide);
       } catch (err) {
-        console.warn('Failed to load pose topology:', err);
-        setPoseTopology(null);
+        console.warn('Failed to load metadata:', err);
       }
       
-      await poseApi.generate(session.id);
-      pollPoseStatus(session.id);
+      subscribeToSessionEvents(session.id);
+      startStatusPolling(session.id);
     } catch (err) { 
       setStatus('idle'); 
     }
   };
 
-  const pollPoseStatus = (sid: string) => {
-    const interval = setInterval(async () => {
+  const subscribeToSessionEvents = (sid: string) => {
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+
+    console.log(`[SSE] Subscribing: ${sid}`);
+    const eventSource = new EventSource(`/sessions/${sid}/events`);
+    eventSourceRef.current = eventSource;
+
+    eventSource.onmessage = async (event) => {
       try {
-        const res = await poseApi.getStatus(sid);
-        if (res.status === 'completed') {
-          const pose = await poseApi.getCurrent(sid);
-          const converted = toDisplayKeypoints((pose.keypoints || []) as Keypoint[], pose.coordinateMode);
-          setPoseCoordinateMode(converted.mode);
-          setInitialKps(converted.keypoints);
-          setProgress(100);
-          setStatus('editing');
-          clearInterval(interval);
-        } else if (res.status === 'failed') {
-          setProgress(-1);
+        const data = JSON.parse(event.data);
+
+        if (data.status === 'pending' || data.status === 'generating') {
+          setProgress(data.progress || 0);
+          setStatus('analyzing');
+        }
+
+        if (data.status === 'completed') {
+          if (!data.pose_id) {
+            console.warn('[SSE] Completed event received without pose_id');
+            return;
+          }
+
+          // 중복 전송 방지를 위해 즉시 닫기
+          eventSource.close();
+          eventSourceRef.current = null;
+          console.log('[SSE] Completed. Fetching final pose...');
+
+          const pose = await poseApi.getById(data.pose_id);
+          applyLoadedPose({
+            keypoints: (pose.keypoints || (pose as any).points || []) as Keypoint[],
+            editorState: pose.editorState ?? null,
+          });
+          stopStatusPolling();
+        }
+
+        if (data.status === 'failed') {
+          eventSource.close();
+          eventSourceRef.current = null;
           setStatus('failed');
-          clearInterval(interval);
-        } else {
-          // pending or generating status
-          setProgress(res.progress || 0);
+          stopStatusPolling();
         }
       } catch (err) {
-        setStatus('failed');
-        clearInterval(interval);
+        console.error('[SSE] Message error:', err);
       }
-    }, 2000);
+    };
+
+    eventSource.onerror = () => {
+      eventSource.close();
+      eventSourceRef.current = null;
+      startStatusPolling(sid);
+    };
+    return () => eventSource.close();
   };
 
+  React.useEffect(() => {
+    return () => {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
+      if (statusPollRef.current) {
+        window.clearInterval(statusPollRef.current);
+        statusPollRef.current = null;
+      }
+    };
+  }, []);
+
   const handleRender = async () => {
-    if (!sessionId || !prompt || !hasAuthSession()) return;
+    if (!sessionId || !isLoggedIn) return;
+    
+    // UI 상태를 즉시 'rendering'으로 전환하여 버튼 비활성화 및 로딩 표시
     setProgress(0);
     setStatus('rendering');
+    setRenderErrorMessage(null);
+    
     try {
-      const job = await renderApi.request(sessionId, prompt);
+      // Step 1: 현재 캔버스의 최종 포즈 데이터를 서버에 저장
+      console.log('[App] Saving final pose before rendering...');
+      await poseApi.update(sessionId, toApiKeypoints(keypoints), latestEditorStateRef.current ?? undefined);
+
+      const poseProjectionImage = await canvasEditorRef.current?.capturePoseProjection();
+      
+      // Step 2: 렌더링(이미지 생성) 요청
+      console.log('[App] Requesting render with prompt:', prompt);
+      const job = await renderApi.request(sessionId, prompt || "", poseProjectionImage || undefined);
       pollRenderStatus(sessionId, job.job_id);
-    } catch (err) { setStatus('editing'); }
+    } catch (err) {
+      console.error('[App] Unified action failed:', err);
+      setStatus('editing'); 
+    }
   };
 
   const pollRenderStatus = (sid: string, jid: string) => {
@@ -347,8 +518,14 @@ const AppContent: React.FC = () => {
           setProgress(100);
           setStatus('completed');
           clearInterval(interval);
+        } else if (res.status === 'quota_exceeded') {
+          setProgress(-1);
+          setRenderErrorMessage('렌더링 쿼터를 초과했습니다. 잠시 후 다시 시도해주세요.');
+          setStatus('failed');
+          clearInterval(interval);
         } else if (res.status === 'failed') {
           setProgress(-1);
+          setRenderErrorMessage('렌더링 중 오류가 발생했습니다. 다시 시도해주세요.');
           setStatus('failed');
           clearInterval(interval);
         } else {
@@ -386,27 +563,19 @@ const AppContent: React.FC = () => {
       />
       <main className="flex-1 relative flex flex-col items-center bg-[#050505] overflow-hidden">
         <div className="w-full flex-1 overflow-y-auto flex flex-col items-center p-20 pt-32">
-          {(status === 'analyzing' || status === 'rendering') && (
-            <motion.div 
-              initial={{ opacity: 0, y: -10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="w-80 mb-12"
-            >
-              <ProgressBar progress={progress} status={status === 'analyzing' ? 'analyzing' : 'rendering'} />
-            </motion.div>
-          )}
           <motion.div layout className="relative">
             <CanvasEditor 
+              ref={canvasEditorRef}
+              key={sessionId || 'idle'}
               keypoints={keypoints}
               backgroundImage={lineArtImage}
-              jointGuides={jointGuides}
               topology={poseTopology}
-              draggingIdx={draggingIdx}
-              onStart={handleStart}
-              onMove={handleMove}
-              onEnd={handleEnd}
-              isLoading={status === 'analyzing'}
-              scaleAll={scaleAll}
+              guide={poseGuide}
+              initialEditorState={initialEditorState}
+              onUpdateKeypoint={handleUpdateKeypoint3D}
+              onEditorStateChange={(editorState) => {
+                latestEditorStateRef.current = editorState;
+              }}
             />
             <AnimatePresence>
               {status === 'idle' && (
@@ -424,6 +593,7 @@ const AppContent: React.FC = () => {
             onPromptChange={setPrompt}
             onRender={handleRender}
             isLoading={status === 'rendering'}
+            errorMessage={renderErrorMessage}
           />
         )}
       </main>
@@ -435,7 +605,6 @@ const App: React.FC = () => {
   return (
     <Router>
       <Routes>
-        <Route path="/auth/callback" element={<CallbackPage />} />
         <Route path="/" element={<AppContent />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

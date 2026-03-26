@@ -1,9 +1,25 @@
-﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Upload, Loader2, LogOut, User, Menu, FolderPlus } from 'lucide-react';
 import { Badge } from '../ui';
-import { ProgressBar } from '../common/ProgressBar';
 import type { PipelineStatus } from '../../types';
 import type { SessionListItem } from '../../types/api';
+
+const formatKstLabel = (isoLike: string) => {
+  const parsed = new Date(isoLike);
+  if (Number.isNaN(parsed.getTime())) {
+    return isoLike.replace('T', ' ').substring(0, 16);
+  }
+
+  return new Intl.DateTimeFormat('ko-KR', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(parsed);
+};
 
 interface SidebarProps {
   status: PipelineStatus;
@@ -125,37 +141,42 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-6">
-        <div className="grid grid-cols-2 gap-3">
-          <button
-            onClick={onNewSession}
-            className="h-12 rounded-2xl border border-zinc-800 bg-zinc-950/90 px-4 flex items-center justify-center gap-2 text-sm font-semibold text-white hover:border-white/20 hover:bg-zinc-900 transition-colors"
-          >
-            <FolderPlus size={16} />
-            <span>새 세션</span>
-          </button>
-          <button
-            onClick={handleUploadClick}
-            disabled={status !== 'idle'}
-            className="h-12 rounded-2xl border border-zinc-800 bg-white text-black px-4 flex items-center justify-center gap-2 text-sm font-semibold hover:bg-zinc-200 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            {status === 'analyzing' ? <Loader2 className="animate-spin" size={16} /> : <Upload size={16} />}
-            <span>{status === 'idle' ? '라인 업로드' : '처리 중'}</span>
-          </button>
-          <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleFileChange} />
-        </div>
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              onClick={onNewSession}
+              className="h-12 rounded-2xl border border-zinc-800 bg-zinc-950/90 px-4 flex items-center justify-center gap-2 text-sm font-semibold text-white hover:border-white/20 hover:bg-zinc-900 transition-colors"
+            >
+              <FolderPlus size={16} />
+              <span>새 세션</span>
+            </button>
+            <button
+              onClick={handleUploadClick}
+              disabled={status === 'analyzing' || status === 'rendering'}
+              className="h-12 rounded-2xl border border-zinc-800 bg-white text-black px-4 flex items-center justify-center gap-2 text-sm font-semibold hover:bg-zinc-200 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {status === 'analyzing' ? <Loader2 className="animate-spin" size={16} /> : <Upload size={16} />}
+              <span>{(status === 'analyzing' || status === 'rendering') ? '처리 중' : '라인 업로드'}</span>
+            </button>
+            <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleFileChange} />
+          </div>
 
-        {(status === 'analyzing' || status === 'rendering') && (
-          <section>
-            <label className="text-[10px] font-bold uppercase text-zinc-500 tracking-wider mb-3 block">작업 진행</label>
-            <div className="space-y-3 rounded-3xl border border-zinc-900 bg-zinc-950/60 p-4">
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-zinc-400">상태</span>
-                <Badge>{status}</Badge>
+          {/* 버튼 바로 아래 진행률 표시 */}
+          {(status === 'analyzing' || status === 'rendering') && (
+            <div className="px-1 animate-in fade-in slide-in-from-top-1 duration-300">
+              <div className="flex justify-between items-center mb-1.5">
+                <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-tighter">AI Processing</span>
+                <span className="text-[10px] font-mono font-bold text-white">{progress}%</span>
               </div>
-              <ProgressBar progress={progress} status={status} />
+              <div className="h-1 w-full bg-zinc-900 rounded-full overflow-hidden">
+                <div 
+                  className="h-full bg-white transition-all duration-500 ease-out" 
+                  style={{ width: `${progress}%` }}
+                />
+              </div>
             </div>
-          </section>
-        )}
+          )}
+        </div>
 
         <section>
           <label className="text-[10px] font-bold uppercase text-zinc-500 tracking-wider mb-4 block">Session Panel</label>
@@ -178,7 +199,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       <div className="flex items-center justify-between gap-3">
                         <div className="min-w-0">
                           <div className="truncate font-semibold">{displayName}</div>
-                          <div className="text-[10px] text-zinc-500 mt-1">{new Date(session.updatedAt).toLocaleString()}</div>
+                          <div className="text-[10px] text-zinc-500 mt-1">
+                            {formatKstLabel(session.updatedAt)}
+                          </div>
                         </div>
                         {session.id === sessionId && <Badge className="bg-white text-black border-none">OPEN</Badge>}
                       </div>

@@ -1,787 +1,836 @@
-﻿import React, { useMemo, useRef, useEffect, useState } from 'react';
+import React, { Suspense, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { OrbitControls, Sphere, TransformControls, useGLTF, useTexture } from '@react-three/drei';
+import * as THREE from 'three';
+import { clone } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import type { Keypoint } from '../../types';
-import type { PoseGuideJoint, PoseTopologyResponse } from '../../types/api';
+import type { PoseEditorState, PoseGuideResponse, PoseTopologyResponse } from '../../types/api';
 
-type GroupName = PoseGuideJoint['group'] | 'unknown';
+const MODEL_URL = '/models/bane_male_texture_rigged_merged.glb';
+const BACKGROUND_OPACITY = 0.42;
+const TARGET_MODEL_HEIGHT = 6.4;
+const JOINT_HANDLE_RADIUS = 0.055;
+const POSE_PROJECTION_MAX_WIDTH = 384;
+const POSE_PROJECTION_MAX_HEIGHT = 512;
+const POSE_PROJECTION_QUALITY = 0.76;
+const DISABLED_RAYCAST: THREE.Object3D['raycast'] = () => null;
 
-const GROUP_LABELS: Record<GroupName, string> = {
-  arm: '팔',
-  hand: '손',
-  leg: '다리',
-  torso: '몸통',
-  head: '머리',
-  face: '얼굴',
-  unknown: '기타',
+type TransformMode = 'translate' | 'rotate' | 'scale';
+type TransformTarget = 'whole' | 'bone';
+
+export type CanvasEditorHandle = {
+  capturePoseProjection: () => Promise<string | null>;
 };
 
-const GROUP_FALLBACK_COLORS: Record<GroupName, string> = {
-  head: '#fde68a',
-  face: '#f9a8d4',
-  torso: '#a78bfa',
-  arm: '#60a5fa',
-  hand: '#34d399',
-  leg: '#fb7185',
-  unknown: '#a1a1aa',
+type RigState = {
+  isRigged: boolean;
+  canEditBones: boolean;
+  mappedBoneCount: number;
+  firstBoneId: string | null;
+  message: string | null;
 };
 
-const JOINT_ALIASES: Record<string, string[]> = {
-  head: ['head', 'top_head', 'head_top'],
-  neck: ['neck', 'cervical'],
-  chest: ['chest', 'spine2', 'upper_spine', 'thorax'],
-  abdomen: ['abdomen', 'spine1', 'stomach', 'belly'],
-  spine: ['spine', 'mid_hip', 'pelvis_center', 'hip_center', 'lower_spine'],
-  pelvis: ['pelvis', 'hip', 'root'],
-  leftShoulder: ['left_shoulder', 'l_shoulder', 'shoulder_left'],
-  rightShoulder: ['right_shoulder', 'r_shoulder', 'shoulder_right'],
-  leftElbow: ['left_elbow', 'l_elbow', 'elbow_left'],
-  rightElbow: ['right_elbow', 'r_elbow', 'elbow_right'],
-  leftWrist: ['left_wrist', 'l_wrist', 'wrist_left'],
-  rightWrist: ['right_wrist', 'r_wrist', 'wrist_right'],
-  leftHip: ['left_hip', 'l_hip', 'hip_left'],
-  rightHip: ['right_hip', 'r_hip', 'hip_right'],
-  leftKnee: ['left_knee', 'l_knee', 'knee_left'],
-  rightKnee: ['right_knee', 'r_knee', 'knee_right'],
-  leftAnkle: ['left_ankle', 'l_ankle', 'ankle_left'],
-  rightAnkle: ['right_ankle', 'r_ankle', 'ankle_right'],
-  leftFoot: ['left_foot', 'left_toe', 'foot_left', 'toe_left'],
-  rightFoot: ['right_foot', 'right_toe', 'foot_right', 'toe_right'],
+type BoneOption = {
+  id: string;
+  keypointName?: string;
+  bone: THREE.Bone;
 };
 
-const rgba = (hex: string, alpha: number) => {
-  const normalized = hex.replace('#', '');
-  const safeHex = normalized.length === 3
-    ? normalized.split('').map((value) => value + value).join('')
-    : normalized.padEnd(6, '0').slice(0, 6);
-  const red = Number.parseInt(safeHex.slice(0, 2), 16);
-  const green = Number.parseInt(safeHex.slice(2, 4), 16);
-  const blue = Number.parseInt(safeHex.slice(4, 6), 16);
-  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+type EditableBoneDefinition = {
+  id: string;
+  keypointName?: string;
+  candidates: string[];
+  tokenSets: string[][];
 };
 
-const averagePoint = (...points: Array<{ x: number; y: number } | undefined>) => {
-  const validPoints = points.filter(Boolean) as Array<{ x: number; y: number }>;
-  if (validPoints.length === 0) return undefined;
-
-  const total = validPoints.reduce((acc, point) => ({ x: acc.x + point.x, y: acc.y + point.y }), { x: 0, y: 0 });
-  return { x: total.x / validPoints.length, y: total.y / validPoints.length };
+const KEYPOINT_BONE_CANDIDATES: Record<string, string[]> = {
+  head: ['mixamorigHead', 'Head', 'face'],
+  neck: ['mixamorigNeck', 'Neck', 'spine.006'],
+  chest: ['mixamorigSpine2', 'mixamorigSpine1', 'Spine2', 'Spine1', 'Chest', 'chest', 'spine.005'],
+  abdomen: ['mixamorigSpine1', 'mixamorigSpine', 'Spine1', 'Spine', 'UpperChest', 'wiest', 'spine.004', 'spine.003'],
+  spine: ['mixamorigSpine', 'Spine', 'wiest', 'spine.002', 'spine.001', 'spine'],
+  pelvis: ['mixamorigHips', 'Hips', 'Pelvis', 'hip', 'pelvis.L', 'pelvis.R'],
+  left_shoulder: ['mixamorigLeftShoulder', 'LeftShoulder', 'upperarm.L', 'shoulder.L'],
+  left_elbow: ['mixamorigLeftForeArm', 'LeftForeArm', 'LeftLowerArm', 'LeftElbow', 'lowerarm.L', 'forearm.L'],
+  left_wrist: ['mixamorigLeftHand', 'LeftHand', 'LeftWrist', 'hand.L'],
+  right_shoulder: ['mixamorigRightShoulder', 'RightShoulder', 'upperarm.R', 'shoulder.R'],
+  right_elbow: ['mixamorigRightForeArm', 'RightForeArm', 'RightLowerArm', 'RightElbow', 'lowerarm.R', 'forearm.R'],
+  right_wrist: ['mixamorigRightHand', 'RightHand', 'RightWrist', 'hand.R'],
+  left_hip: ['mixamorigLeftUpLeg', 'LeftUpLeg', 'LeftThigh', 'LeftHip', 'upperleg.L', 'thigh.L'],
+  left_knee: ['mixamorigLeftLeg', 'LeftLeg', 'LeftCalf', 'LeftKnee', 'lowerleg.L', 'shin.L'],
+  left_ankle: ['mixamorigLeftFoot', 'LeftFoot', 'LeftAnkle', 'foot.L'],
+  left_foot: ['mixamorigLeftToeBase', 'LeftToeBase', 'LeftToe', 'toe.L'],
+  right_hip: ['mixamorigRightUpLeg', 'RightUpLeg', 'RightThigh', 'RightHip', 'upperleg.R', 'thigh.R'],
+  right_knee: ['mixamorigRightLeg', 'RightLeg', 'RightCalf', 'RightKnee', 'lowerleg.R', 'shin.R'],
+  right_ankle: ['mixamorigRightFoot', 'RightFoot', 'RightAnkle', 'foot.R'],
+  right_foot: ['mixamorigRightToeBase', 'RightToeBase', 'RightToe', 'toe.R'],
 };
 
-const distance = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y);
-const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
-
-type EditorDragTarget =
-  | { type: 'joint'; index: number }
-  | { type: 'group'; indices: number[] }
-  | { type: 'global' };
-
-const pointToSegmentDistance = (point: { x: number; y: number }, start: { x: number; y: number }, end: { x: number; y: number }) => {
-  const dx = end.x - start.x;
-  const dy = end.y - start.y;
-  const lengthSquared = dx * dx + dy * dy;
-  if (lengthSquared === 0) return distance(point, start);
-  const t = Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared));
-  const projection = { x: start.x + dx * t, y: start.y + dy * t };
-  return distance(point, projection);
+const KEYPOINT_BONE_TOKENS: Record<string, string[][]> = {
+  head: [['head'], ['face']],
+  neck: [['neck'], ['spine006']],
+  chest: [['spine2'], ['chest'], ['upperchest'], ['spine005']],
+  abdomen: [['spine1'], ['spine004'], ['spine003']],
+  spine: [['spine002'], ['spine001'], ['spine']],
+  pelvis: [['hips'], ['pelvis'], ['hip']],
+  left_shoulder: [['left', 'shoulder'], ['l', 'shoulder'], ['upperarm', 'l'], ['shoulder', 'l']],
+  left_elbow: [['left', 'forearm'], ['left', 'lowerarm'], ['left', 'elbow'], ['lowerarm', 'l'], ['forearm', 'l']],
+  left_wrist: [['left', 'hand'], ['left', 'wrist'], ['hand', 'l']],
+  right_shoulder: [['right', 'shoulder'], ['r', 'shoulder'], ['upperarm', 'r'], ['shoulder', 'r']],
+  right_elbow: [['right', 'forearm'], ['right', 'lowerarm'], ['right', 'elbow'], ['lowerarm', 'r'], ['forearm', 'r']],
+  right_wrist: [['right', 'hand'], ['right', 'wrist'], ['hand', 'r']],
+  left_hip: [['left', 'upleg'], ['left', 'thigh'], ['left', 'hip'], ['upperleg', 'l'], ['thigh', 'l']],
+  left_knee: [['left', 'leg'], ['left', 'calf'], ['left', 'knee'], ['lowerleg', 'l'], ['shin', 'l']],
+  left_ankle: [['left', 'foot'], ['left', 'ankle'], ['foot', 'l']],
+  left_foot: [['left', 'toebase'], ['left', 'toe'], ['toe', 'l']],
+  right_hip: [['right', 'upleg'], ['right', 'thigh'], ['right', 'hip'], ['upperleg', 'r'], ['thigh', 'r']],
+  right_knee: [['right', 'leg'], ['right', 'calf'], ['right', 'knee'], ['lowerleg', 'r'], ['shin', 'r']],
+  right_ankle: [['right', 'foot'], ['right', 'ankle'], ['foot', 'r']],
+  right_foot: [['right', 'toebase'], ['right', 'toe'], ['toe', 'r']],
 };
 
-const pointInPolygon = (point: { x: number; y: number }, polygon: Array<{ x: number; y: number }>) => {
-  let inside = false;
-  for (let index = 0, previous = polygon.length - 1; index < polygon.length; previous = index, index += 1) {
-    const current = polygon[index];
-    const prev = polygon[previous];
-    const intersects = ((current.y > point.y) !== (prev.y > point.y))
-      && (point.x < ((prev.x - current.x) * (point.y - current.y)) / ((prev.y - current.y) || 1e-6) + current.x);
-    if (intersects) inside = !inside;
+const EDITABLE_BONE_DEFINITIONS: EditableBoneDefinition[] = [
+  { id: 'head', keypointName: 'head', candidates: KEYPOINT_BONE_CANDIDATES.head, tokenSets: KEYPOINT_BONE_TOKENS.head },
+  { id: 'neck', keypointName: 'neck', candidates: KEYPOINT_BONE_CANDIDATES.neck, tokenSets: KEYPOINT_BONE_TOKENS.neck },
+  { id: 'chest', keypointName: 'chest', candidates: KEYPOINT_BONE_CANDIDATES.chest, tokenSets: KEYPOINT_BONE_TOKENS.chest },
+  { id: 'abdomen', keypointName: 'abdomen', candidates: KEYPOINT_BONE_CANDIDATES.abdomen, tokenSets: KEYPOINT_BONE_TOKENS.abdomen },
+  { id: 'spine', keypointName: 'spine', candidates: KEYPOINT_BONE_CANDIDATES.spine, tokenSets: KEYPOINT_BONE_TOKENS.spine },
+  { id: 'pelvis', keypointName: 'pelvis', candidates: KEYPOINT_BONE_CANDIDATES.pelvis, tokenSets: KEYPOINT_BONE_TOKENS.pelvis },
+  { id: 'left_shoulder', keypointName: 'left_shoulder', candidates: KEYPOINT_BONE_CANDIDATES.left_shoulder, tokenSets: KEYPOINT_BONE_TOKENS.left_shoulder },
+  { id: 'left_elbow', keypointName: 'left_elbow', candidates: KEYPOINT_BONE_CANDIDATES.left_elbow, tokenSets: KEYPOINT_BONE_TOKENS.left_elbow },
+  { id: 'left_wrist', keypointName: 'left_wrist', candidates: KEYPOINT_BONE_CANDIDATES.left_wrist, tokenSets: KEYPOINT_BONE_TOKENS.left_wrist },
+  { id: 'right_shoulder', keypointName: 'right_shoulder', candidates: KEYPOINT_BONE_CANDIDATES.right_shoulder, tokenSets: KEYPOINT_BONE_TOKENS.right_shoulder },
+  { id: 'right_elbow', keypointName: 'right_elbow', candidates: KEYPOINT_BONE_CANDIDATES.right_elbow, tokenSets: KEYPOINT_BONE_TOKENS.right_elbow },
+  { id: 'right_wrist', keypointName: 'right_wrist', candidates: KEYPOINT_BONE_CANDIDATES.right_wrist, tokenSets: KEYPOINT_BONE_TOKENS.right_wrist },
+  { id: 'left_hip', keypointName: 'left_hip', candidates: KEYPOINT_BONE_CANDIDATES.left_hip, tokenSets: KEYPOINT_BONE_TOKENS.left_hip },
+  { id: 'left_knee', keypointName: 'left_knee', candidates: KEYPOINT_BONE_CANDIDATES.left_knee, tokenSets: KEYPOINT_BONE_TOKENS.left_knee },
+  { id: 'left_ankle', keypointName: 'left_ankle', candidates: KEYPOINT_BONE_CANDIDATES.left_ankle, tokenSets: KEYPOINT_BONE_TOKENS.left_ankle },
+  { id: 'left_foot', keypointName: 'left_foot', candidates: KEYPOINT_BONE_CANDIDATES.left_foot, tokenSets: KEYPOINT_BONE_TOKENS.left_foot },
+  { id: 'right_hip', keypointName: 'right_hip', candidates: KEYPOINT_BONE_CANDIDATES.right_hip, tokenSets: KEYPOINT_BONE_TOKENS.right_hip },
+  { id: 'right_knee', keypointName: 'right_knee', candidates: KEYPOINT_BONE_CANDIDATES.right_knee, tokenSets: KEYPOINT_BONE_TOKENS.right_knee },
+  { id: 'right_ankle', keypointName: 'right_ankle', candidates: KEYPOINT_BONE_CANDIDATES.right_ankle, tokenSets: KEYPOINT_BONE_TOKENS.right_ankle },
+  { id: 'right_foot', keypointName: 'right_foot', candidates: KEYPOINT_BONE_CANDIDATES.right_foot, tokenSets: KEYPOINT_BONE_TOKENS.right_foot },
+  { id: 'left_thumb_1', candidates: ['thumb.01.L'], tokenSets: [['thumb01l']] },
+  { id: 'left_thumb_2', candidates: ['thumb.02.L'], tokenSets: [['thumb02l']] },
+  { id: 'left_thumb_3', keypointName: 'left_thumb', candidates: ['thumb.03.L'], tokenSets: [['thumb03l']] },
+  { id: 'left_index_1', candidates: ['f_index.01.L'], tokenSets: [['findex01l']] },
+  { id: 'left_index_2', candidates: ['f_index.02.L'], tokenSets: [['findex02l']] },
+  { id: 'left_index_3', keypointName: 'left_index', candidates: ['f_index.03.L'], tokenSets: [['findex03l']] },
+  { id: 'left_middle_1', candidates: ['f_middle.01.L'], tokenSets: [['fmiddle01l']] },
+  { id: 'left_middle_2', candidates: ['f_middle.02.L'], tokenSets: [['fmiddle02l']] },
+  { id: 'left_middle_3', keypointName: 'left_middle', candidates: ['f_middle.03.L'], tokenSets: [['fmiddle03l']] },
+  { id: 'left_ring_1', candidates: ['f_ring.01.L'], tokenSets: [['fring01l']] },
+  { id: 'left_ring_2', candidates: ['f_ring.02.L'], tokenSets: [['fring02l']] },
+  { id: 'left_ring_3', keypointName: 'left_ring', candidates: ['f_ring.03.L'], tokenSets: [['fring03l']] },
+  { id: 'left_pinky_1', candidates: ['f_pinky.01.L'], tokenSets: [['fpinky01l']] },
+  { id: 'left_pinky_2', candidates: ['f_pinky.02.L'], tokenSets: [['fpinky02l']] },
+  { id: 'left_pinky_3', keypointName: 'left_pinky', candidates: ['f_pinky.03.L'], tokenSets: [['fpinky03l']] },
+  { id: 'right_thumb_1', candidates: ['thumb.01.R'], tokenSets: [['thumb01r']] },
+  { id: 'right_thumb_2', candidates: ['thumb.02.R'], tokenSets: [['thumb02r']] },
+  { id: 'right_thumb_3', keypointName: 'right_thumb', candidates: ['thumb.03.R'], tokenSets: [['thumb03r']] },
+  { id: 'right_index_1', candidates: ['f_index.01.R'], tokenSets: [['findex01r']] },
+  { id: 'right_index_2', candidates: ['f_index.02.R'], tokenSets: [['findex02r']] },
+  { id: 'right_index_3', keypointName: 'right_index', candidates: ['f_index.03.R'], tokenSets: [['findex03r']] },
+  { id: 'right_middle_1', candidates: ['f_middle.01.R'], tokenSets: [['fmiddle01r']] },
+  { id: 'right_middle_2', candidates: ['f_middle.02.R'], tokenSets: [['fmiddle02r']] },
+  { id: 'right_middle_3', keypointName: 'right_middle', candidates: ['f_middle.03.R'], tokenSets: [['fmiddle03r']] },
+  { id: 'right_ring_1', candidates: ['f_ring.01.R'], tokenSets: [['fring01r']] },
+  { id: 'right_ring_2', candidates: ['f_ring.02.R'], tokenSets: [['fring02r']] },
+  { id: 'right_ring_3', keypointName: 'right_ring', candidates: ['f_ring.03.R'], tokenSets: [['fring03r']] },
+  { id: 'right_pinky_1', candidates: ['f_pinky.01.R'], tokenSets: [['fpinky01r']] },
+  { id: 'right_pinky_2', candidates: ['f_pinky.02.R'], tokenSets: [['fpinky02r']] },
+  { id: 'right_pinky_3', keypointName: 'right_pinky', candidates: ['f_pinky.03.R'], tokenSets: [['fpinky03r']] },
+  { id: 'left_heel', candidates: ['heel.02.L'], tokenSets: [['heel02l']] },
+  { id: 'right_heel', candidates: ['heel.02.R'], tokenSets: [['heel02r']] },
+];
+
+const BackgroundImage = ({ url }: { url: string }) => {
+  const texture = useTexture(url);
+  return (
+    <mesh position={[0, 0, -1.6]}>
+      <planeGeometry args={[6, 8]} />
+      <meshBasicMaterial map={texture} opacity={BACKGROUND_OPACITY} transparent />
+    </mesh>
+  );
+};
+
+const normalizeName = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+const buildGuideColorMap = (guide?: PoseGuideResponse | null) => {
+  const map = new Map<string, string>();
+  guide?.joints.forEach((joint) => {
+    map.set(joint.name, joint.color);
+  });
+  return map;
+};
+
+const findExactBone = (bones: THREE.Bone[], candidates: string[]) => {
+  const normalizedCandidates = candidates.map(normalizeName);
+  return bones.find((bone) => normalizedCandidates.includes(normalizeName(bone.name))) ?? null;
+};
+
+const findBoneByDefinition = (bones: THREE.Bone[], definition: EditableBoneDefinition) => {
+  const exactMatch = findExactBone(bones, definition.candidates);
+  if (exactMatch) return exactMatch;
+
+  for (const tokens of definition.tokenSets) {
+    const match = bones.find((bone) => {
+      const normalized = normalizeName(bone.name);
+      return tokens.every((token) => normalized.includes(token));
+    });
+    if (match) return match;
   }
-  return inside;
+
+  return null;
 };
 
-const normalizeName = (value: string) => value.toLowerCase().replace(/[^a-z0-9가-힣]/g, '');
+const mapEditableBones = (bones: THREE.Bone[]) => {
+  return EDITABLE_BONE_DEFINITIONS
+    .map((definition) => {
+      const bone = findBoneByDefinition(bones, definition);
+      if (!bone) return null;
+      return {
+        id: definition.id,
+        keypointName: definition.keypointName,
+        bone,
+      } as BoneOption;
+    })
+    .filter(Boolean) as BoneOption[];
+};
+
+const BoneHandle = ({
+  bone,
+  color,
+  selected,
+  hovered,
+  onSelect,
+  onHoverChange,
+  visible,
+}: {
+  bone: THREE.Bone;
+  color: string;
+  selected: boolean;
+  hovered: boolean;
+  onSelect: () => void;
+  onHoverChange: (hovered: boolean) => void;
+  visible: boolean;
+}) => {
+  const meshRef = useRef<THREE.Mesh>(null);
+
+  useFrame(() => {
+    if (!meshRef.current) return;
+    const position = new THREE.Vector3();
+    bone.getWorldPosition(position);
+    meshRef.current.position.copy(position);
+  });
+
+  return (
+    <Sphere
+      ref={meshRef}
+      args={[
+        selected ? JOINT_HANDLE_RADIUS * 1.16 : hovered ? JOINT_HANDLE_RADIUS * 1.08 : JOINT_HANDLE_RADIUS,
+        18,
+        18,
+      ]}
+      visible={visible}
+      onClick={(event) => {
+        event.stopPropagation();
+        onSelect();
+      }}
+      onPointerOver={(event) => {
+        event.stopPropagation();
+        onHoverChange(true);
+      }}
+      onPointerOut={(event) => {
+        event.stopPropagation();
+        onHoverChange(false);
+      }}
+    >
+      <meshStandardMaterial
+        color={selected ? '#f8fafc' : hovered ? '#e5eefb' : color}
+        emissive={selected ? color : hovered ? '#dbeafe' : '#111827'}
+        emissiveIntensity={selected ? 0.58 : hovered ? 0.28 : 0.05}
+        transparent
+        opacity={selected ? 0.88 : hovered ? 0.48 : 0.18}
+        depthTest={false}
+        depthWrite={false}
+      />
+    </Sphere>
+  );
+};
+
+const CaptureBridge = ({
+  captureRequestId,
+  enabled,
+  onCaptured,
+}: {
+  captureRequestId: number;
+  enabled: boolean;
+  onCaptured: (imageData: string | null) => void;
+}) => {
+  const { gl, scene, camera } = useThree();
+
+  useEffect(() => {
+    if (!enabled || captureRequestId === 0) return;
+
+    let cancelled = false;
+    const previousBackground = scene.background;
+    const previousClearAlpha = gl.getClearAlpha();
+    const previousClearColor = gl.getClearColor(new THREE.Color()).clone();
+
+    const capture = () => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (cancelled) return;
+
+          scene.background = new THREE.Color('#f8f8f6');
+          gl.setClearColor('#f8f8f6', 1);
+          gl.render(scene, camera);
+
+          const sourceCanvas = gl.domElement;
+          const exportCanvas = document.createElement('canvas');
+          const scale = Math.min(
+            1,
+            POSE_PROJECTION_MAX_WIDTH / sourceCanvas.width,
+            POSE_PROJECTION_MAX_HEIGHT / sourceCanvas.height,
+          );
+
+          exportCanvas.width = Math.max(1, Math.round(sourceCanvas.width * scale));
+          exportCanvas.height = Math.max(1, Math.round(sourceCanvas.height * scale));
+
+          const context = exportCanvas.getContext('2d');
+          context?.drawImage(sourceCanvas, 0, 0, exportCanvas.width, exportCanvas.height);
+
+          const imageData = exportCanvas.toDataURL('image/jpeg', POSE_PROJECTION_QUALITY);
+
+          scene.background = previousBackground;
+          gl.setClearColor(previousClearColor, previousClearAlpha);
+          onCaptured(imageData);
+        });
+      });
+    };
+
+    capture();
+
+    return () => {
+      cancelled = true;
+      scene.background = previousBackground;
+      gl.setClearColor(previousClearColor, previousClearAlpha);
+    };
+  }, [camera, captureRequestId, enabled, gl, onCaptured, scene]);
+
+  return null;
+};
+
+const RiggedMannequin = ({
+  keypoints,
+  backgroundImage,
+  guide,
+  initialEditorState,
+  captureMode,
+  transformMode,
+  transformTarget,
+  selectedBoneId,
+  onSelectBone,
+  onSetDragging,
+  onUpdateKeypoint,
+  onEditorStateChange,
+  onRigStateChange,
+  onCanvasSelectWhole,
+}: {
+  keypoints: Keypoint[];
+  backgroundImage?: string | null;
+  guide?: PoseGuideResponse | null;
+  initialEditorState?: PoseEditorState | null;
+  captureMode: boolean;
+  transformMode: TransformMode;
+  transformTarget: TransformTarget;
+  selectedBoneId: string | null;
+  onSelectBone: (boneId: string) => void;
+  onSetDragging: (dragging: boolean) => void;
+  onUpdateKeypoint: (index: number, newPos: THREE.Vector3, isFinal: boolean) => void;
+  onEditorStateChange?: (editorState: PoseEditorState, isFinal: boolean) => void;
+  onRigStateChange: (state: RigState) => void;
+  onCanvasSelectWhole: () => void;
+}) => {
+  const gltf = useGLTF(MODEL_URL);
+  const scene = useMemo(() => clone(gltf.scene) as THREE.Group, [gltf.scene]);
+  const [pivotObject, setPivotObject] = useState<THREE.Object3D | null>(null);
+  const [hoveredBoneId, setHoveredBoneId] = useState<string | null>(null);
+  const appliedEditorStateSignatureRef = useRef<string | null>(null);
+
+  const guideColors = useMemo(() => buildGuideColorMap(guide), [guide]);
+
+  useEffect(() => {
+    scene.traverse((object) => {
+      if (!(object instanceof THREE.Mesh || object instanceof THREE.SkinnedMesh)) return;
+      const currentMaterial = Array.isArray(object.material) ? object.material[0] : object.material;
+      const nextMaterial = currentMaterial instanceof THREE.MeshStandardMaterial
+        ? currentMaterial.clone()
+        : new THREE.MeshStandardMaterial();
+
+      nextMaterial.color = new THREE.Color('#d9d6cf');
+      nextMaterial.roughness = 0.9;
+      nextMaterial.metalness = 0.03;
+      nextMaterial.envMapIntensity = 0.18;
+      nextMaterial.needsUpdate = true;
+
+      object.material = nextMaterial;
+    });
+  }, [scene]);
+
+  useEffect(() => {
+    scene.traverse((object) => {
+      if (!(object instanceof THREE.Mesh || object instanceof THREE.SkinnedMesh)) return;
+
+      if (!object.userData.originalRaycast) {
+        object.userData.originalRaycast = object.raycast;
+      }
+
+      object.raycast = transformTarget === 'bone'
+        ? DISABLED_RAYCAST
+        : (object.userData.originalRaycast as THREE.Object3D['raycast']);
+    });
+
+    return () => {
+      scene.traverse((object) => {
+        if (!(object instanceof THREE.Mesh || object instanceof THREE.SkinnedMesh)) return;
+        if (object.userData.originalRaycast) {
+          object.raycast = object.userData.originalRaycast as THREE.Object3D['raycast'];
+        }
+      });
+    };
+  }, [scene, transformTarget]);
+
+  const modelMeta = useMemo(() => {
+    const bones: THREE.Bone[] = [];
+    let hasSkinnedMesh = false;
+
+    scene.updateMatrixWorld(true);
+    scene.traverse((object) => {
+      if (object instanceof THREE.Bone) bones.push(object);
+      if (object instanceof THREE.SkinnedMesh) hasSkinnedMesh = true;
+    });
+
+    const bounds = new THREE.Box3().setFromObject(scene);
+    const size = bounds.getSize(new THREE.Vector3());
+    const center = bounds.getCenter(new THREE.Vector3());
+    const pivot = new THREE.Vector3(center.x, bounds.min.y + size.y * 0.56, center.z);
+    const scale = size.y > 0 ? TARGET_MODEL_HEIGHT / size.y : 1;
+
+    return {
+      bones,
+      hasSkinnedMesh,
+      scale,
+      pivot,
+    };
+  }, [scene]);
+
+  const boneOptions = useMemo(() => mapEditableBones(modelMeta.bones), [modelMeta.bones]);
+
+  const rigState = useMemo<RigState>(() => {
+    if (!modelMeta.hasSkinnedMesh || modelMeta.bones.length === 0) {
+      return {
+        isRigged: false,
+        canEditBones: false,
+        mappedBoneCount: 0,
+        firstBoneId: null,
+        message: 'This GLB has no skin/bone rig. Replace it with a rigged mannequin to enable bone editing.',
+      };
+    }
+
+    if (boneOptions.length === 0) {
+      return {
+        isRigged: true,
+        canEditBones: false,
+        mappedBoneCount: 0,
+        firstBoneId: null,
+        message: 'A skeleton exists, but no editable body bones were matched from this rig.',
+      };
+    }
+
+    return {
+      isRigged: true,
+      canEditBones: true,
+      mappedBoneCount: boneOptions.length,
+      firstBoneId: boneOptions[0]?.id ?? null,
+      message: null,
+    };
+  }, [boneOptions, modelMeta.bones.length, modelMeta.hasSkinnedMesh]);
+
+  useEffect(() => {
+    onRigStateChange(rigState);
+  }, [onRigStateChange, rigState]);
+
+  const boneById = useMemo(() => {
+    const map = new Map<string, THREE.Bone>();
+    boneOptions.forEach((option) => {
+      map.set(option.id, option.bone);
+    });
+    return map;
+  }, [boneOptions]);
+
+  const selectedBoneObject = selectedBoneId ? boneById.get(selectedBoneId) ?? null : null;
+  const effectiveMode: TransformMode = transformTarget === 'bone' ? 'rotate' : transformMode;
+  const selectedObject = transformTarget === 'whole' ? pivotObject : selectedBoneObject;
+  const showBoneHandles = rigState.canEditBones && transformTarget === 'bone';
+
+  const keypointIndexByName = useMemo(() => {
+    const map = new Map<string, number>();
+    keypoints.forEach((kp, index) => map.set(kp.name, index));
+    return map;
+  }, [keypoints]);
+
+  const syncKeypointsFromBones = useCallback((isFinal: boolean) => {
+    if (!rigState.canEditBones) return;
+    const world = new THREE.Vector3();
+    boneOptions.forEach((option) => {
+      if (!option.keypointName) return;
+      const index = keypointIndexByName.get(option.keypointName);
+      if (typeof index !== 'number') return;
+      const bone = boneById.get(option.id);
+      if (!bone) return;
+      bone.getWorldPosition(world);
+      onUpdateKeypoint(index, world.clone(), isFinal);
+    });
+  }, [boneById, boneOptions, keypointIndexByName, onUpdateKeypoint, rigState.canEditBones]);
+
+  const captureEditorState = useCallback((): PoseEditorState | null => {
+    if (!pivotObject) return null;
+
+    scene.updateMatrixWorld(true);
+
+    const wholeTransform = {
+      position: pivotObject.position.toArray() as [number, number, number],
+      quaternion: pivotObject.quaternion.toArray() as [number, number, number, number],
+      scale: pivotObject.scale.toArray() as [number, number, number],
+    };
+
+    const bones = boneOptions.reduce<Record<string, { quaternion: [number, number, number, number] }>>((accumulator, option) => {
+      accumulator[option.id] = {
+        quaternion: option.bone.quaternion.toArray() as [number, number, number, number],
+      };
+      return accumulator;
+    }, {});
+
+    return {
+      version: '1.0',
+      wholeTransform,
+      bones,
+    };
+  }, [boneOptions, pivotObject, scene]);
+
+  const initialEditorStateSignature = useMemo(
+    () => (initialEditorState ? JSON.stringify(initialEditorState) : null),
+    [initialEditorState],
+  );
+
+  useEffect(() => {
+    if (!initialEditorState || !initialEditorStateSignature || !pivotObject || boneOptions.length === 0) {
+      return;
+    }
+    if (appliedEditorStateSignatureRef.current === initialEditorStateSignature) {
+      return;
+    }
+
+    const { wholeTransform, bones } = initialEditorState;
+    pivotObject.position.fromArray(wholeTransform.position);
+    pivotObject.quaternion.fromArray(wholeTransform.quaternion);
+    pivotObject.scale.fromArray(wholeTransform.scale);
+
+    boneOptions.forEach((option) => {
+      const savedBone = bones[option.id];
+      if (savedBone?.quaternion) {
+        option.bone.quaternion.fromArray(savedBone.quaternion);
+      }
+    });
+
+    scene.updateMatrixWorld(true);
+    appliedEditorStateSignatureRef.current = initialEditorStateSignature;
+  }, [boneOptions, initialEditorState, initialEditorStateSignature, pivotObject, scene]);
+
+  return (
+    <>
+      <ambientLight intensity={1.45} />
+      <directionalLight position={[2.5, 4.5, 6]} intensity={1.15} />
+      <pointLight position={[0, 0, 8]} intensity={0.72} />
+
+      {backgroundImage && !captureMode && <BackgroundImage url={backgroundImage} />}
+
+      <group
+        ref={(object) => {
+          setPivotObject(object);
+        }}
+        onClick={(event) => {
+          event.stopPropagation();
+          onCanvasSelectWhole();
+        }}
+      >
+        <group scale={[modelMeta.scale, modelMeta.scale, modelMeta.scale]}>
+          <group position={[-modelMeta.pivot.x, -modelMeta.pivot.y, -modelMeta.pivot.z]}>
+            <primitive object={scene} />
+          </group>
+        </group>
+      </group>
+
+      {rigState.canEditBones && !captureMode &&
+        boneOptions.map((option) => (
+          <BoneHandle
+            key={option.id}
+            bone={option.bone}
+            color={guideColors.get(option.id) || '#a5b4fc'}
+            selected={selectedBoneId === option.id}
+            hovered={hoveredBoneId === option.id}
+            visible={showBoneHandles}
+            onSelect={() => onSelectBone(option.id)}
+            onHoverChange={(hovered) => {
+              setHoveredBoneId((current) => {
+                if (hovered) return option.id;
+                return current === option.id ? null : current;
+              });
+            }}
+          />
+        ))}
+
+      {selectedObject && !captureMode && (
+        <TransformControls
+          object={selectedObject}
+          mode={effectiveMode}
+          size={transformTarget === 'bone' ? 0.34 : 0.76}
+          space={transformTarget === 'bone' ? 'local' : 'world'}
+          onObjectChange={() => {
+            onSetDragging(true);
+            syncKeypointsFromBones(false);
+          }}
+          onMouseUp={() => {
+            onSetDragging(false);
+            const editorState = captureEditorState();
+            if (editorState) {
+              onEditorStateChange?.(editorState, true);
+            }
+            syncKeypointsFromBones(true);
+          }}
+        />
+      )}
+    </>
+  );
+};
 
 interface CanvasEditorProps {
   keypoints: Keypoint[];
   backgroundImage?: string | null;
-  jointGuides?: PoseGuideJoint[];
   topology?: PoseTopologyResponse | null;
-  draggingIdx: number | null;
-  onStart: (x: number, y: number, target?: EditorDragTarget) => void;
-  onMove: (x: number, y: number) => void;
-  onEnd: () => void;
-  scaleAll: (factor: number) => void;
-  isLoading?: boolean;
+  guide?: PoseGuideResponse | null;
+  initialEditorState?: PoseEditorState | null;
+  onUpdateKeypoint: (index: number, newPos: THREE.Vector3, isFinal: boolean) => void;
+  onEditorStateChange?: (editorState: PoseEditorState, isFinal: boolean) => void;
 }
 
-export const CanvasEditor: React.FC<CanvasEditorProps> = ({ 
-  keypoints, backgroundImage, jointGuides, topology, draggingIdx, onStart, onMove, onEnd, scaleAll, isLoading
-}) => {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [scale, setScale] = useState(1);
-  const [offset, setOffset] = useState({ x: 0, y: 0 });
-  const [isPanning, setIsPanning] = useState(false);
-  const [panStart, setPanStart] = useState<{ x: number; y: number } | null>(null);
-  const [editMode, setEditMode] = useState<'standard' | 'global'>('standard');
+export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorProps>(({
+  keypoints,
+  backgroundImage,
+  guide,
+  initialEditorState,
+  onUpdateKeypoint,
+  onEditorStateChange,
+}, ref) => {
+  const [dragging, setDragging] = useState(false);
+  const [transformTarget, setTransformTarget] = useState<TransformTarget>('whole');
+  const [transformMode, setTransformMode] = useState<TransformMode>('translate');
+  const [selectedBoneId, setSelectedBoneId] = useState<string | null>(null);
+  const [showShortcuts, setShowShortcuts] = useState(true);
+  const [captureMode, setCaptureMode] = useState(false);
+  const [captureRequestId, setCaptureRequestId] = useState(0);
+  const [rigState, setRigState] = useState<RigState>({
+    isRigged: false,
+    canEditBones: false,
+    mappedBoneCount: 0,
+    firstBoneId: null,
+    message: null,
+  });
+  const captureResolverRef = useRef<((imageData: string | null) => void) | null>(null);
+  const activeTarget: TransformTarget = rigState.canEditBones ? transformTarget : 'whole';
 
-  const CANVAS_WIDTH = 600;
-  const CANVAS_HEIGHT = 800;
+  const handleCaptureComplete = useCallback((imageData: string | null) => {
+    setCaptureMode(false);
+    const resolve = captureResolverRef.current;
+    captureResolverRef.current = null;
+    resolve?.(imageData);
+  }, []);
 
-  useEffect(() => {
-    setScale(1);
-    setOffset({ x: 0, y: 0 });
-  }, [backgroundImage]);
+  useImperativeHandle(ref, () => ({
+    capturePoseProjection: () => new Promise((resolve) => {
+      captureResolverRef.current = resolve;
+      setCaptureMode(true);
+      setCaptureRequestId((current) => current + 1);
+    }),
+  }), []);
 
-  const jointGuideMap = useMemo(() => new Map((jointGuides || []).map((joint) => [joint.name, joint])), [jointGuides]);
-  const keypointByName = useMemo(() => new Map(keypoints.map((keypoint) => [keypoint.name, keypoint])), [keypoints]);
-  const keypointIndexByName = useMemo(() => new Map(keypoints.map((keypoint, index) => [keypoint.name, index] as const)), [keypoints]);
-  const topologyJointNames = useMemo(() => {
-    const names = new Set<string>();
-    if (!topology) return names;
-    (topology.edges || []).forEach(([from, to]) => {
-      names.add(from);
-      names.add(to);
-    });
-    Object.values(topology.groups || {}).forEach((items) => {
-      (items || []).forEach((name) => names.add(name));
-    });
-    return names;
-  }, [topology]);
+  const enterBoneMode = useCallback(() => {
+    if (!rigState.canEditBones) return;
+    setTransformTarget('bone');
+    setTransformMode('rotate');
+    setSelectedBoneId((current) => current ?? rigState.firstBoneId ?? null);
+  }, [rigState.canEditBones, rigState.firstBoneId]);
 
-  const getJoint = (aliases: string[]) => {
-    const direct = aliases.map((alias) => keypointByName.get(alias)).find(Boolean);
-    if (direct) return direct;
-
-    const candidates = topologyJointNames.size > 0
-      ? keypoints.filter((point) => topologyJointNames.has(point.name))
-      : keypoints;
-
-    for (const alias of aliases) {
-      const normalizedAlias = normalizeName(alias);
-      for (const point of candidates) {
-        const normalizedPoint = normalizeName(point.name);
-        if (normalizedPoint.includes(normalizedAlias) || normalizedAlias.includes(normalizedPoint)) {
-          return point;
-        }
-      }
-    }
-    return undefined;
-  };
-
-  const namedJoints = {
-    head: getJoint(JOINT_ALIASES.head),
-    neck: getJoint(JOINT_ALIASES.neck),
-    chest: getJoint(JOINT_ALIASES.chest),
-    abdomen: getJoint(JOINT_ALIASES.abdomen),
-    spine: getJoint(JOINT_ALIASES.spine),
-    pelvis: getJoint(JOINT_ALIASES.pelvis),
-    leftShoulder: getJoint(JOINT_ALIASES.leftShoulder),
-    rightShoulder: getJoint(JOINT_ALIASES.rightShoulder),
-    leftElbow: getJoint(JOINT_ALIASES.leftElbow),
-    rightElbow: getJoint(JOINT_ALIASES.rightElbow),
-    leftWrist: getJoint(JOINT_ALIASES.leftWrist),
-    rightWrist: getJoint(JOINT_ALIASES.rightWrist),
-    leftHip: getJoint(JOINT_ALIASES.leftHip),
-    rightHip: getJoint(JOINT_ALIASES.rightHip),
-    leftKnee: getJoint(JOINT_ALIASES.leftKnee),
-    rightKnee: getJoint(JOINT_ALIASES.rightKnee),
-    leftAnkle: getJoint(JOINT_ALIASES.leftAnkle),
-    rightAnkle: getJoint(JOINT_ALIASES.rightAnkle),
-    leftFoot: getJoint(JOINT_ALIASES.leftFoot),
-    rightFoot: getJoint(JOINT_ALIASES.rightFoot),
-  };
-
-  const digitGroups = useMemo(() => {
-    const filterBy = (matcher: (normalized: string) => boolean) => keypoints.filter((point) => matcher(normalizeName(point.name)));
-    return {
-      leftFingers: filterBy((name) => /thumb|index|middle|ring|pinky|finger|엄지|검지|중지|약지|새끼|손가락/.test(name) && /(left|l|왼|좌)/.test(name)),
-      rightFingers: filterBy((name) => /thumb|index|middle|ring|pinky|finger|엄지|검지|중지|약지|새끼|손가락/.test(name) && /(right|r|오른|우)/.test(name)),
-      leftToes: filterBy((name) => /toe|toes|발가락/.test(name) && /(left|l|왼|좌)/.test(name)),
-      rightToes: filterBy((name) => /toe|toes|발가락/.test(name) && /(right|r|오른|우)/.test(name)),
-    };
-  }, [keypoints]);
-
-  const derivedPoints = useMemo(() => {
-    const shoulderCenter = averagePoint(namedJoints.leftShoulder, namedJoints.rightShoulder, namedJoints.chest);
-    const hipCenter = averagePoint(namedJoints.leftHip, namedJoints.rightHip, namedJoints.pelvis, namedJoints.spine);
-    const neck = namedJoints.neck || (shoulderCenter
-      ? {
-          name: '__virtual_neck__',
-          x: shoulderCenter.x,
-          y: clamp01(shoulderCenter.y - Math.max(0.02, Math.abs((namedJoints.head?.y ?? shoulderCenter.y - 0.08) - shoulderCenter.y) * 0.18)),
-        }
-      : undefined);
-
-    const palmFrom = (wrist?: Keypoint, fingers: Keypoint[] = []) => {
-      if (!wrist) return undefined;
-      const fingertipCenter = averagePoint(...fingers);
-      if (!fingertipCenter) return wrist;
-      return {
-        x: wrist.x * 0.45 + fingertipCenter.x * 0.55,
-        y: wrist.y * 0.45 + fingertipCenter.y * 0.55,
-      };
-    };
-
-    const soleFrom = (ankle?: Keypoint, foot?: Keypoint, toes: Keypoint[] = []) => {
-      if (!ankle) return undefined;
-      const toeCenter = averagePoint(...toes);
-      if (foot && toeCenter) {
-        return {
-          x: (ankle.x + foot.x + toeCenter.x) / 3,
-          y: (ankle.y + foot.y + toeCenter.y) / 3,
-        };
-      }
-      if (foot) {
-        return { x: (ankle.x + foot.x) / 2, y: (ankle.y + foot.y) / 2 };
-      }
-      return toeCenter ? { x: (ankle.x + toeCenter.x) / 2, y: (ankle.y + toeCenter.y) / 2 } : ankle;
-    };
-
-    const headCenter = neck
-      ? (() => {
-          const headY = namedJoints.head?.y ?? clamp01(neck.y - 0.1);
-          const span = Math.max(0.03, Math.abs(neck.y - headY));
-          return {
-            x: namedJoints.head?.x ?? neck.x,
-            y: clamp01(neck.y - span * 0.58),
-          };
-        })()
-      : namedJoints.head;
-
-    return {
-      shoulderCenter,
-      hipCenter,
-      neck,
-      headCenter,
-      leftPalm: palmFrom(namedJoints.leftWrist, digitGroups.leftFingers),
-      rightPalm: palmFrom(namedJoints.rightWrist, digitGroups.rightFingers),
-      leftSole: soleFrom(namedJoints.leftAnkle, namedJoints.leftFoot, digitGroups.leftToes),
-      rightSole: soleFrom(namedJoints.rightAnkle, namedJoints.rightFoot, digitGroups.rightToes),
-    };
-  }, [digitGroups.leftFingers, digitGroups.leftToes, digitGroups.rightFingers, digitGroups.rightToes, namedJoints]);
-
-  const dragGroups = useMemo(() => {
-    const namesToIndices = (names: Array<string | undefined>) => Array.from(new Set(names
-      .map((name) => (name ? keypointIndexByName.get(name) : undefined))
-      .filter((value): value is number => value !== undefined)));
-
-    return {
-      torso: namesToIndices([
-        namedJoints.head?.name,
-        namedJoints.neck?.name,
-        namedJoints.chest?.name,
-        namedJoints.abdomen?.name,
-        namedJoints.spine?.name,
-        namedJoints.pelvis?.name,
-        namedJoints.leftShoulder?.name,
-        namedJoints.rightShoulder?.name,
-        namedJoints.leftHip?.name,
-        namedJoints.rightHip?.name,
-      ]),
-      leftArm: namesToIndices([namedJoints.leftShoulder?.name, namedJoints.leftElbow?.name, namedJoints.leftWrist?.name, ...digitGroups.leftFingers.map((point) => point.name)]),
-      rightArm: namesToIndices([namedJoints.rightShoulder?.name, namedJoints.rightElbow?.name, namedJoints.rightWrist?.name, ...digitGroups.rightFingers.map((point) => point.name)]),
-      leftLeg: namesToIndices([namedJoints.leftHip?.name, namedJoints.leftKnee?.name, namedJoints.leftAnkle?.name, namedJoints.leftFoot?.name, ...digitGroups.leftToes.map((point) => point.name)]),
-      rightLeg: namesToIndices([namedJoints.rightHip?.name, namedJoints.rightKnee?.name, namedJoints.rightAnkle?.name, namedJoints.rightFoot?.name, ...digitGroups.rightToes.map((point) => point.name)]),
-      head: namesToIndices([namedJoints.head?.name, namedJoints.neck?.name]),
-    };
-  }, [digitGroups.leftFingers, digitGroups.leftToes, digitGroups.rightFingers, digitGroups.rightToes, keypointIndexByName, namedJoints]);
-
-  const groupSummaries = Object.values(
-    (jointGuides || []).reduce<Record<string, { group: GroupName; color: string; count: number }>>((acc, joint) => {
-      const group = (joint.group || 'unknown') as GroupName;
-      if (!acc[group]) {
-        acc[group] = { group, color: joint.color || GROUP_FALLBACK_COLORS[group], count: 0 };
-      }
-      acc[group].count += 1;
-      return acc;
-    }, {})
-  );
-
-  const getGroupColor = (jointName?: string, fallbackGroup: GroupName = 'unknown') => {
-    if (!jointName) return GROUP_FALLBACK_COLORS[fallbackGroup];
-    const guide = jointGuideMap.get(jointName);
-    const group = (guide?.group || fallbackGroup) as GroupName;
-    return guide?.color || GROUP_FALLBACK_COLORS[group];
-  };
+  const enterWholeMode = useCallback((mode: TransformMode = 'translate') => {
+    setTransformTarget('whole');
+    setTransformMode(mode);
+    setSelectedBoneId(null);
+  }, []);
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    if (rigState.canEditBones && transformTarget === 'bone' && !selectedBoneId) {
+      setSelectedBoneId(rigState.firstBoneId ?? null);
+    }
+  }, [rigState.canEditBones, rigState.firstBoneId, selectedBoneId, transformTarget]);
 
-    const toCanvasPoint = (point?: { x: number; y: number }) => point ? ({ x: point.x * canvas.width, y: point.y * canvas.height }) : undefined;
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const tagName = target?.tagName?.toLowerCase();
+      if (tagName === 'input' || tagName === 'textarea' || target?.isContentEditable) return;
 
-    const drawLimb = (points: Keypoint[], color: string, thickness: number) => {
-      if (points.length < 2) return;
-      ctx.save();
-      ctx.strokeStyle = rgba(color, 0.5);
-      ctx.lineWidth = thickness;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      ctx.beginPath();
-      points.forEach((point, index) => {
-        const canvasPoint = toCanvasPoint(point);
-        if (!canvasPoint) return;
-        if (index === 0) ctx.moveTo(canvasPoint.x, canvasPoint.y);
-        else ctx.lineTo(canvasPoint.x, canvasPoint.y);
-      });
-      ctx.stroke();
-      ctx.restore();
-    };
+      const key = event.key.toLowerCase();
+      let handled = true;
 
-    const drawMannequin = () => {
-      const leftShoulder = toCanvasPoint(namedJoints.leftShoulder);
-      const rightShoulder = toCanvasPoint(namedJoints.rightShoulder);
-      const chest = toCanvasPoint(namedJoints.chest);
-      const spine = toCanvasPoint(namedJoints.spine);
-      const pelvis = toCanvasPoint(namedJoints.pelvis);
-      const leftHip = toCanvasPoint(namedJoints.leftHip);
-      const rightHip = toCanvasPoint(namedJoints.rightHip);
-      const head = toCanvasPoint(derivedPoints.headCenter);
-      const neck = toCanvasPoint(derivedPoints.neck);
-      const abdomen = toCanvasPoint(namedJoints.abdomen);
-
-      const shoulderCenter = averagePoint(leftShoulder, rightShoulder, chest, neck);
-      const hipCenter = averagePoint(leftHip, rightHip, pelvis, spine);
-
-      if (head && neck) {
-        const headRadius = Math.max(distance(head, neck) * 1.15, 20);
-        ctx.save();
-        ctx.fillStyle = rgba(getGroupColor(namedJoints.head?.name, 'head'), 0.28);
-        ctx.strokeStyle = rgba(getGroupColor(namedJoints.head?.name, 'head'), 0.85);
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.ellipse(head.x, head.y, headRadius * 0.88, headRadius * 1.12, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-        ctx.restore();
-
-        ctx.save();
-        ctx.strokeStyle = rgba(getGroupColor(namedJoints.head?.name, 'head'), 0.7);
-        ctx.lineWidth = 8;
-        ctx.lineCap = 'round';
-        ctx.beginPath();
-        ctx.moveTo(neck.x, neck.y);
-        ctx.lineTo((head.x + neck.x) / 2, head.y + (neck.y - head.y) * 0.28);
-        ctx.stroke();
-        ctx.restore();
-      }
-
-      const torsoColor = getGroupColor(namedJoints.chest?.name || namedJoints.spine?.name, 'torso');
-
-      if (leftShoulder && rightShoulder && (hipCenter || leftHip || rightHip)) {
-        const upperLeft = leftShoulder;
-        const upperRight = rightShoulder;
-        const lowerRight = averagePoint(rightHip, hipCenter, abdomen, spine);
-        const lowerLeft = averagePoint(leftHip, hipCenter, abdomen, spine);
-
-        if (lowerLeft && lowerRight) {
-          ctx.save();
-          ctx.fillStyle = rgba(torsoColor, 0.25);
-          ctx.strokeStyle = rgba(torsoColor, 0.7);
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          ctx.moveTo(upperLeft.x, upperLeft.y);
-          ctx.lineTo(upperRight.x, upperRight.y);
-          ctx.lineTo(lowerRight.x, lowerRight.y);
-          ctx.lineTo(lowerLeft.x, lowerLeft.y);
-          ctx.closePath();
-          ctx.fill();
-          ctx.stroke();
-          ctx.restore();
-        }
-      }
-
-      if (chest && shoulderCenter) {
-        const chestRadius = Math.max(distance(chest, shoulderCenter) * 0.75, 22);
-        ctx.save();
-        ctx.fillStyle = rgba(torsoColor, 0.22);
-        ctx.strokeStyle = rgba(torsoColor, 0.6);
-        ctx.beginPath();
-        ctx.ellipse(chest.x, chest.y, chestRadius * 1.2, chestRadius * 0.8, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-        ctx.restore();
-      }
-
-      if (abdomen && pelvis) {
-        const midSize = Math.max(distance(abdomen, pelvis) * 0.55, 16);
-        ctx.save();
-        ctx.fillStyle = rgba(torsoColor, 0.2);
-        ctx.strokeStyle = rgba(torsoColor, 0.55);
-        ctx.beginPath();
-        ctx.ellipse(abdomen.x, abdomen.y, midSize * 1.1, midSize * 0.7, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-        ctx.restore();
-      }
-
-      if (pelvis && (leftHip || rightHip)) {
-        const leftPelvis = averagePoint(leftHip, pelvis, spine) || pelvis;
-        const rightPelvis = averagePoint(rightHip, pelvis, spine) || pelvis;
-        const pelvisCenter = averagePoint(leftPelvis, rightPelvis, pelvis) || pelvis;
-        const pelvisRadius = Math.max(distance(leftPelvis, rightPelvis) * 0.5, 18);
-        ctx.save();
-        ctx.fillStyle = rgba(torsoColor, 0.2);
-        ctx.strokeStyle = rgba(torsoColor, 0.55);
-        ctx.beginPath();
-        ctx.ellipse(pelvisCenter.x, pelvisCenter.y, pelvisRadius * 1.2, pelvisRadius * 0.68, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-        ctx.restore();
-      }
-
-      drawLimb([namedJoints.leftShoulder, namedJoints.leftElbow, namedJoints.leftWrist].filter(Boolean) as Keypoint[], getGroupColor(namedJoints.leftShoulder?.name, 'arm'), 24);
-      drawLimb([namedJoints.rightShoulder, namedJoints.rightElbow, namedJoints.rightWrist].filter(Boolean) as Keypoint[], getGroupColor(namedJoints.rightShoulder?.name, 'arm'), 24);
-      drawLimb([namedJoints.leftHip, namedJoints.leftKnee, namedJoints.leftAnkle, namedJoints.leftFoot].filter(Boolean) as Keypoint[], getGroupColor(namedJoints.leftHip?.name, 'leg'), 28);
-      drawLimb([namedJoints.rightHip, namedJoints.rightKnee, namedJoints.rightAnkle, namedJoints.rightFoot].filter(Boolean) as Keypoint[], getGroupColor(namedJoints.rightHip?.name, 'leg'), 28);
-      drawLimb(([derivedPoints.neck, namedJoints.chest, namedJoints.abdomen, namedJoints.spine, namedJoints.pelvis].filter(Boolean) as Array<{ x: number; y: number; name?: string }>) as Keypoint[], torsoColor, 16);
-
-      if (leftShoulder && rightShoulder) {
-        drawLimb([namedJoints.leftShoulder, namedJoints.rightShoulder].filter(Boolean) as Keypoint[], getGroupColor(namedJoints.chest?.name, 'torso'), 18);
-      }
-
-      if (leftHip && rightHip) {
-        drawLimb([namedJoints.leftHip, namedJoints.rightHip].filter(Boolean) as Keypoint[], getGroupColor(namedJoints.pelvis?.name, 'torso'), 18);
-      }
-
-      const drawDetailedDigits = (side: 'left' | 'right') => {
-        const wrist = side === 'left' ? namedJoints.leftWrist : namedJoints.rightWrist;
-        const ankle = side === 'left' ? namedJoints.leftAnkle : namedJoints.rightAnkle;
-        const palm = side === 'left' ? derivedPoints.leftPalm : derivedPoints.rightPalm;
-        const sole = side === 'left' ? derivedPoints.leftSole : derivedPoints.rightSole;
-        const sideKeywords = side === 'left' ? ['left', 'l_', '왼', '좌'] : ['right', 'r_', '오른', '우'];
-
-        const fingerPoints = keypoints.filter((point) => {
-          const normalized = normalizeName(point.name);
-          const isFinger = /finger|thumb|index|middle|ring|pinky|손가락|엄지|검지|중지|약지|새끼/.test(normalized);
-          const sideMatch = sideKeywords.some((keyword) => normalized.includes(normalizeName(keyword)));
-          return isFinger && sideMatch;
-        });
-
-        const toePoints = keypoints.filter((point) => {
-          const normalized = normalizeName(point.name);
-          const isToe = /toe|toes|발가락/.test(normalized);
-          const sideMatch = sideKeywords.some((keyword) => normalized.includes(normalizeName(keyword)));
-          return isToe && sideMatch;
-        });
-
-        const fingerColor = getGroupColor(wrist?.name, 'hand');
-        const toeColor = getGroupColor(ankle?.name, 'leg');
-
-        if (wrist && palm) {
-          drawLimb([{ ...wrist }, { name: `${side}_palm`, x: palm.x, y: palm.y }] as Keypoint[], fingerColor, 14);
-          const palmPoint = toCanvasPoint(palm);
-          if (palmPoint) {
-            ctx.save();
-            ctx.fillStyle = rgba(fingerColor, 0.26);
-            ctx.strokeStyle = rgba(fingerColor, 0.7);
-            ctx.beginPath();
-            ctx.ellipse(palmPoint.x, palmPoint.y, 14, 10, side === 'left' ? -0.35 : 0.35, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.stroke();
-            ctx.restore();
+      switch (key) {
+        case 'w':
+          if (activeTarget === 'whole') {
+            setTransformMode('translate');
           }
-        }
-
-        if (ankle && sole) {
-          drawLimb([{ ...ankle }, { name: `${side}_sole`, x: sole.x, y: sole.y }] as Keypoint[], toeColor, 16);
-          const solePoint = toCanvasPoint(sole);
-          if (solePoint) {
-            ctx.save();
-            ctx.fillStyle = rgba(toeColor, 0.24);
-            ctx.strokeStyle = rgba(toeColor, 0.68);
-            ctx.beginPath();
-            ctx.ellipse(solePoint.x, solePoint.y, 18, 11, side === 'left' ? -0.15 : 0.15, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.stroke();
-            ctx.restore();
+          break;
+        case 'e':
+          if (activeTarget === 'whole') {
+            setTransformMode('rotate');
           }
-        }
+          break;
+        case 'r':
+          if (activeTarget === 'whole') {
+            setTransformMode('scale');
+          }
+          break;
+        case '1':
+          enterBoneMode();
+          break;
+        case '2':
+          enterWholeMode('translate');
+          break;
+        case 'escape':
+          setSelectedBoneId(null);
+          break;
+        case 'h':
+        case '?':
+          setShowShortcuts((current) => !current);
+          break;
+        default:
+          handled = false;
+      }
 
-        if ((palm || wrist) && fingerPoints.length > 0) {
-          const sortedFingers = [...fingerPoints].sort((a, b) => a.x - b.x);
-          sortedFingers.forEach((finger) => {
-            drawLimb(([palm ? { name: `${side}_palm`, x: palm.x, y: palm.y } : wrist, finger].filter(Boolean)) as Keypoint[], fingerColor, 8);
-          });
-        }
-
-        if ((sole || ankle) && toePoints.length > 0) {
-          const sortedToes = [...toePoints].sort((a, b) => a.x - b.x);
-          sortedToes.forEach((toe) => {
-            drawLimb(([sole ? { name: `${side}_sole`, x: sole.x, y: sole.y } : ankle, toe].filter(Boolean)) as Keypoint[], toeColor, 8);
-          });
-        }
-      };
-
-      drawDetailedDigits('left');
-      drawDetailedDigits('right');
-
-      keypoints.forEach((keypoint, index) => {
-        const visualPoint = /head/.test(normalizeName(keypoint.name)) && derivedPoints.neck
-          ? derivedPoints.neck
-          : keypoint;
-        const canvasPoint = toCanvasPoint(visualPoint);
-        if (!canvasPoint) return;
-        const guide = jointGuideMap.get(keypoint.name);
-        const group = (guide?.group || 'unknown') as GroupName;
-        const color = guide?.color || GROUP_FALLBACK_COLORS[group];
-        const isDragging = draggingIdx === index;
-
-        ctx.save();
-        ctx.fillStyle = isDragging ? '#ffffff' : rgba(color, 0.92);
-        ctx.strokeStyle = isDragging ? rgba(color, 1) : 'rgba(255,255,255,0.85)';
-        ctx.lineWidth = isDragging ? 3.5 : 1.6;
-        ctx.beginPath();
-        ctx.arc(canvasPoint.x, canvasPoint.y, isDragging ? 8.5 : 6.5, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-        ctx.restore();
-      });
-
-      if (!namedJoints.neck && derivedPoints.neck) {
-        const neckPoint = toCanvasPoint(derivedPoints.neck);
-        if (neckPoint) {
-          const color = getGroupColor(namedJoints.chest?.name, 'torso');
-          ctx.save();
-          ctx.fillStyle = '#ffffff';
-          ctx.strokeStyle = rgba(color, 1);
-          ctx.lineWidth = 3;
-          ctx.beginPath();
-          ctx.arc(neckPoint.x, neckPoint.y, 7.5, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.stroke();
-          ctx.restore();
-        }
+      if (handled) {
+        event.preventDefault();
       }
     };
 
-    const drawScene = (image?: HTMLImageElement) => {
-      if (image) {
-        const imageScale = Math.min(CANVAS_WIDTH / image.width, CANVAS_HEIGHT / image.height);
-        const drawWidth = image.width * imageScale;
-        const drawHeight = image.height * imageScale;
-        const drawOffsetX = (CANVAS_WIDTH - drawWidth) / 2;
-        const drawOffsetY = (CANVAS_HEIGHT - drawHeight) / 2;
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [activeTarget, enterBoneMode, enterWholeMode]);
 
-        ctx.save();
-        ctx.globalAlpha = 0.72;
-        ctx.drawImage(image, drawOffsetX, drawOffsetY, drawWidth, drawHeight);
-        ctx.restore();
-      }
-
-      drawMannequin();
-    };
-
-    const drawCanvas = (image?: HTMLImageElement) => {
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = '#09090b';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      ctx.setTransform(scale, 0, 0, scale, offset.x, offset.y);
-      drawScene(image);
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-    };
-
-    if (!backgroundImage) {
-      drawCanvas();
-      return;
-    }
-
-    const image = new Image();
-    image.onload = () => drawCanvas(image);
-    image.onerror = () => drawCanvas();
-    image.src = backgroundImage;
-  }, [backgroundImage, derivedPoints, draggingIdx, jointGuideMap, keypoints, namedJoints, offset.x, offset.y, scale]);
-
-  const getPos = (e: React.MouseEvent) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return { x: 0, y: 0 };
-    const rect = canvas.getBoundingClientRect();
-    const sceneX = (e.clientX - rect.left - offset.x) / scale;
-    const sceneY = (e.clientY - rect.top - offset.y) / scale;
-    return {
-      x: sceneX / canvas.width,
-      y: sceneY / canvas.height
-    };
-  };
-
-  const handleWheel = (event: React.WheelEvent<HTMLCanvasElement>) => {
-    if (!event.ctrlKey) return;
-    event.preventDefault();
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const rect = canvas.getBoundingClientRect();
-    const cursorX = event.clientX - rect.left;
-    const cursorY = event.clientY - rect.top;
-
-    const zoomFactor = event.deltaY < 0 ? 1.08 : 0.92;
-    const nextScale = Math.min(3.5, Math.max(0.45, scale * zoomFactor));
-
-    const ratio = nextScale / scale;
-    const nextOffsetX = cursorX - (cursorX - offset.x) * ratio;
-    const nextOffsetY = cursorY - (cursorY - offset.y) * ratio;
-
-    setScale(nextScale);
-    setOffset({ x: nextOffsetX, y: nextOffsetY });
-  };
-
-  const fitToView = () => {
-    setScale(1);
-    setOffset({ x: 0, y: 0 });
-  };
-
-  const resolveDragTarget = (x: number, y: number): EditorDragTarget | undefined => {
-    if (editMode === 'global') return { type: 'global' };
-
-    const point = { x, y };
-    const nearJointIndex = keypoints.findIndex((keypoint) => Math.hypot(keypoint.x - x, keypoint.y - y) < 0.04);
-    if (nearJointIndex >= 0) return { type: 'joint', index: nearJointIndex };
-
-    const torsoPolygon = [namedJoints.leftShoulder, namedJoints.rightShoulder, namedJoints.rightHip, namedJoints.leftHip]
-      .filter(Boolean) as Keypoint[];
-    if (torsoPolygon.length === 4 && pointInPolygon(point, torsoPolygon)) {
-      return { type: 'group', indices: dragGroups.torso };
-    }
-
-    const segmentHits: Array<{ indices: number[]; score: number }> = [];
-    const pushSegments = (chain: Array<Keypoint | undefined>, indices: number[]) => {
-      const valid = chain.filter(Boolean) as Keypoint[];
-      for (let index = 0; index < valid.length - 1; index += 1) {
-        segmentHits.push({
-          indices,
-          score: pointToSegmentDistance(point, valid[index], valid[index + 1]),
-        });
-      }
-    };
-
-    pushSegments([namedJoints.leftShoulder, namedJoints.leftElbow, namedJoints.leftWrist], dragGroups.leftArm);
-    pushSegments([namedJoints.rightShoulder, namedJoints.rightElbow, namedJoints.rightWrist], dragGroups.rightArm);
-    pushSegments([namedJoints.leftHip, namedJoints.leftKnee, namedJoints.leftAnkle, namedJoints.leftFoot], dragGroups.leftLeg);
-    pushSegments([namedJoints.rightHip, namedJoints.rightKnee, namedJoints.rightAnkle, namedJoints.rightFoot], dragGroups.rightLeg);
-
-    const nearestSegment = segmentHits.sort((a, b) => a.score - b.score)[0];
-    if (nearestSegment && nearestSegment.score < 0.045) {
-      return { type: 'group', indices: nearestSegment.indices };
-    }
-
-    if (derivedPoints.headCenter && derivedPoints.neck) {
-      const headRadius = Math.max(distance(derivedPoints.headCenter, derivedPoints.neck) * 1.2, 0.035);
-      if (distance(point, derivedPoints.headCenter) < headRadius) {
-        return { type: 'group', indices: dragGroups.head };
-      }
-    }
-
-    return undefined;
-  };
-
-  const handleMouseDown = (event: React.MouseEvent<HTMLCanvasElement>) => {
-    if (event.button === 1 || event.button === 2) {
-      event.preventDefault();
-      setIsPanning(true);
-      setPanStart({ x: event.clientX - offset.x, y: event.clientY - offset.y });
-      return;
-    }
-
-    const { x, y } = getPos(event);
-    onStart(x, y, resolveDragTarget(x, y));
-  };
-
-  const handleMouseMove = (event: React.MouseEvent<HTMLCanvasElement>) => {
-    if (isPanning && panStart) {
-      setOffset({ x: event.clientX - panStart.x, y: event.clientY - panStart.y });
-      return;
-    }
-
-    const { x, y } = getPos(event);
-    onMove(x, y);
-  };
-
-  const handleMouseEnd = () => {
-    if (isPanning) {
-      setIsPanning(false);
-      setPanStart(null);
-      return;
-    }
-    onEnd();
-  };
+  const statusText = rigState.canEditBones
+    ? selectedBoneId
+      ? `Bone: ${selectedBoneId}`
+      : 'Bone mode: select a visible joint handle'
+    : rigState.message || 'Whole mannequin transform';
 
   return (
-    <div className="flex gap-6 items-start">
-      <div className="relative glass-card p-4 rounded-2xl shadow-2xl border border-zinc-800">
-        <div className="absolute top-7 left-7 z-20 flex items-center gap-2 rounded-full border border-zinc-800 bg-black/70 px-2 py-1.5 backdrop-blur-sm">
-          <button 
-            onClick={() => setEditMode('standard')} 
-            className={`h-8 px-3 rounded-full text-xs transition-colors ${editMode === 'standard' ? 'bg-white text-black' : 'text-zinc-300 hover:text-white hover:bg-zinc-800'}`}
-          >
-            관절 편집
-          </button>
-          <button 
-            onClick={() => setEditMode('global')} 
-            className={`h-8 px-3 rounded-full text-xs transition-colors ${editMode === 'global' ? 'bg-white text-black' : 'text-zinc-300 hover:text-white hover:bg-zinc-800'}`}
-          >
-            전체 변형
-          </button>
-          {editMode === 'global' && (
-            <>
-              <div className="w-px h-4 bg-zinc-800 mx-1" />
-              <button onClick={() => scaleAll(0.95)} className="h-8 w-8 rounded-full text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors">축소</button>
-              <button onClick={() => scaleAll(1.05)} className="h-8 w-8 rounded-full text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors">확대</button>
-            </>
-          )}
+    <div className="w-[600px] h-[800px] bg-[#0a0a0a] rounded-2xl overflow-hidden relative shadow-[0_0_50px_rgba(0,0,0,0.5)] border border-white/5">
+      <button
+        onClick={() => setShowShortcuts((current) => !current)}
+        className="absolute right-4 top-4 z-20 rounded-xl border border-zinc-700 bg-black/60 px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-zinc-200"
+      >
+        Shortcuts
+      </button>
+
+      {rigState.canEditBones && activeTarget === 'bone' && (
+        <div className="absolute left-4 top-16 z-20 rounded-2xl border border-sky-300/20 bg-sky-100/10 px-4 py-3 text-xs text-sky-50 backdrop-blur-sm">
+          Bone mode is active. The current joint stays highlighted while you rotate it.
         </div>
+      )}
 
-        <div className="absolute top-7 right-7 z-20 flex items-center gap-2 rounded-full border border-zinc-800 bg-black/70 px-2 py-1.5 backdrop-blur-sm">
-          <button onClick={() => setScale((prev) => Math.max(0.45, prev * 0.9))} className="h-8 w-8 rounded-full text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors">-</button>
-          <span className="text-xs font-mono text-zinc-300 w-12 text-center">{Math.round(scale * 100)}%</span>
-          <button onClick={() => setScale((prev) => Math.min(3.5, prev * 1.1))} className="h-8 w-8 rounded-full text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors">+</button>
-          <button onClick={fitToView} className="h-8 px-3 rounded-full text-xs text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors">맞춤</button>
-        </div>
+      <Canvas
+        orthographic
+        camera={{ position: [0, 0, 10], zoom: 100 }}
+        gl={{ preserveDrawingBuffer: true, alpha: true }}
+        onPointerMissed={() => {
+          if (activeTarget === 'bone') {
+            setSelectedBoneId(null);
+          } else {
+            enterWholeMode();
+          }
+        }}
+      >
+        <Suspense fallback={null}>
+          <RiggedMannequin
+            keypoints={keypoints}
+            backgroundImage={backgroundImage}
+            guide={guide}
+            initialEditorState={initialEditorState}
+            captureMode={captureMode}
+            transformMode={transformMode}
+            transformTarget={activeTarget}
+            selectedBoneId={selectedBoneId}
+            onSelectBone={(boneId) => {
+              setSelectedBoneId(boneId);
+            }}
+            onCanvasSelectWhole={() => {
+              if (activeTarget === 'whole') {
+                enterWholeMode();
+              } else {
+                setSelectedBoneId(null);
+              }
+            }}
+            onSetDragging={setDragging}
+            onUpdateKeypoint={onUpdateKeypoint}
+            onEditorStateChange={onEditorStateChange}
+            onRigStateChange={setRigState}
+          />
+          <CaptureBridge
+            captureRequestId={captureRequestId}
+            enabled={captureMode}
+            onCaptured={handleCaptureComplete}
+          />
+        </Suspense>
+        <OrbitControls makeDefault enabled={!dragging} enableRotate={false} />
+      </Canvas>
 
-        <canvas 
-          ref={canvasRef}
-          width={CANVAS_WIDTH}
-          height={CANVAS_HEIGHT}
-          onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseEnd}
-          onMouseLeave={handleMouseEnd}
-          onContextMenu={(event) => event.preventDefault()}
-          onWheel={handleWheel}
-          className="cursor-crosshair bg-zinc-950 rounded-xl"
-        />
-        {isLoading && (
-          <div className="absolute inset-4 bg-zinc-950/80 backdrop-blur-md rounded-xl flex items-center justify-center">
-            <div className="text-white animate-pulse tracking-widest text-xs font-mono uppercase">Preparing Standard Mannequin...</div>
-          </div>
-        )}
-      </div>
-
-      {jointGuides && jointGuides.length > 0 && (
-        <div className="glass-card p-4 rounded-2xl shadow-2xl border border-zinc-800 w-64">
-          <div className="text-xs font-bold uppercase text-zinc-400 mb-4 tracking-wider">Body Guide</div>
-          <div className="space-y-3 max-h-96 overflow-y-auto">
-            {groupSummaries.map((summary) => (
-              <div key={summary.group} className="rounded-2xl border border-zinc-800 bg-zinc-950/70 p-3">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: summary.color }} />
-                    <span className="text-sm font-semibold text-zinc-100 truncate">{GROUP_LABELS[summary.group]}</span>
-                  </div>
-                  <span className="text-[10px] text-zinc-500">{summary.count} joints</span>
-                </div>
-                <div className="mt-2 text-[11px] text-zinc-500 leading-5">
-                  {(jointGuides || [])
-                    .filter((joint) => joint.group === summary.group)
-                    .slice(0, 5)
-                    .map((joint) => joint.label)
-                    .join(' · ')}
-                </div>
-              </div>
-            ))}
+      {showShortcuts && (
+        <div className="absolute right-4 top-16 z-20 w-[220px] rounded-2xl border border-white/10 bg-black/70 p-4 text-[11px] text-zinc-200 backdrop-blur-sm">
+          <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.24em] text-zinc-400">Shortcuts</div>
+          <div className="grid grid-cols-[28px_1fr] gap-y-1">
+            <span className="font-mono text-zinc-100">W</span><span>Move whole mannequin</span>
+            <span className="font-mono text-zinc-100">E</span><span>Rotate whole mannequin</span>
+            <span className="font-mono text-zinc-100">R</span><span>Scale whole mannequin</span>
+            <span className="font-mono text-zinc-100">1</span><span>Bone mode</span>
+            <span className="font-mono text-zinc-100">2</span><span>Whole mannequin mode</span>
+            <span className="font-mono text-zinc-100">Esc</span><span>Clear current selection only</span>
+            <span className="font-mono text-zinc-100">H</span><span>Toggle this guide</span>
           </div>
         </div>
       )}
+
+      {rigState.message && (
+        <div className="absolute inset-x-4 bottom-14 z-20 rounded-2xl border border-amber-300/20 bg-amber-100/10 px-4 py-3 text-sm text-amber-50 backdrop-blur-sm">
+          {rigState.message}
+        </div>
+      )}
+
+      <div className="absolute bottom-4 left-4 pointer-events-none">
+        <div className="text-[10px] text-white/35 font-mono uppercase tracking-widest">
+          {statusText}
+        </div>
+      </div>
     </div>
   );
-};
+});
+
+useGLTF.preload(MODEL_URL);

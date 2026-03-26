@@ -1,87 +1,72 @@
 ﻿import { useState, useEffect } from 'react';
+import { onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
+import type { User } from 'firebase/auth';
+import { auth, googleProvider } from '../lib/firebase';
 import { authApi } from '../api/client';
-import { AUTH_CHANGED_EVENT, clearAuthStore, getAuthStore } from '../lib/authStore';
+import type { MeResponse } from '../types/api';
 
 export const useAuth = () => {
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<User | null>(null);
+  const [dbUser, setDbUser] = useState<MeResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    let isMounted = true;
+    // Firebase의 상태 감시자 설정
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser) {
+        // 로그인 상태일 때
+        setUser(firebaseUser);
 
-    const checkAuth = async () => {
-      const auth = getAuthStore();
-      if (!auth?.accessToken) {
-        if (isMounted) {
-          setIsLoggedIn(false);
-          setUser(null);
-          setIsLoading(false);
+        // 백엔드와 동기화 (필요한 경우)
+        try {
+          const response = await authApi.getMe();
+          setDbUser(response);
+        } catch (e) {
+          console.error('Backend sync failed:', e);
         }
-        return;
-      }
-
-      if (isMounted) {
-        setIsLoggedIn(true);
-        setUser({ user_id: auth.userId, email: auth.email || null });
-      }
-
-      try {
-        const userData = await authApi.getMe();
-        if (isMounted) {
-          setUser(userData);
-          setIsLoggedIn(true);
-        }
-      } catch {
-        const latestAuth = getAuthStore();
-        if (!latestAuth?.accessToken && isMounted) {
-          setIsLoggedIn(false);
-          setUser(null);
-        }
-      } finally {
-        if (isMounted) {
-          setIsLoading(false);
-        }
-      }
-    };
-
-    const syncAuthState = () => {
-      const auth = getAuthStore();
-      if (!auth?.accessToken) {
-        setIsLoggedIn(false);
+      } else {
+        // 로그아웃 상태일 때
         setUser(null);
-        setIsLoading(false);
-        return;
+        setDbUser(null);
       }
-
-      setIsLoggedIn(true);
-      setUser((currentUser: any) => currentUser ?? { user_id: auth.userId, email: auth.email || null });
       setIsLoading(false);
-    };
+    });
 
-    checkAuth();
-
-    window.addEventListener(AUTH_CHANGED_EVENT, syncAuthState);
-
-    return () => {
-      isMounted = false;
-      window.removeEventListener(AUTH_CHANGED_EVENT, syncAuthState);
-    };
+    return () => unsubscribe();
   }, []);
 
-  const login = () => {
-    window.location.href = authApi.getGoogleLoginUrl();
+  const login = async () => {
+    try {
+      setIsLoading(true);
+      await signInWithPopup(auth, googleProvider);
+    } catch (error) {
+      console.error('Login failed:', error);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const logout = async () => {
-    if (user) {
-      try { await authApi.logout(user.user_id || user.id); } catch (e) {}
+    try {
+      setIsLoading(true);
+      await signOut(auth);
+      // 백엔드 로그아웃 API가 있다면 호출 (선택 사항)
+      if (user) {
+        try { await authApi.logout(user.uid); } catch (e) {}
+      }
+    } catch (error) {
+      console.error('Logout failed:', error);
+    } finally {
+      setIsLoading(false);
+      window.location.reload();
     }
-    clearAuthStore();
-    setIsLoggedIn(false);
-    setUser(null);
-    window.location.reload();
   };
 
-  return { isLoggedIn, user, isLoading, login, logout };
+  return {
+    isLoggedIn: !!user,
+    user: dbUser || (user ? { user_id: user.uid, email: user.email, display_name: user.displayName, picture: user.photoURL } : null),
+    isLoading,
+    login,
+    logout
+  };
 };

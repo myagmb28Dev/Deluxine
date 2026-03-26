@@ -1,123 +1,58 @@
-﻿import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import type { Keypoint } from '../types';
-
-type DragTarget =
-  | { type: 'joint'; index: number }
-  | { type: 'group'; indices: number[] }
-  | { type: 'global' };
-
-type DragState = {
-  target: DragTarget;
-  anchor: { x: number; y: number };
-  initialKeypoints: Keypoint[];
-};
-
-const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
+import * as THREE from 'three';
 
 export const usePoseEditor = (initialKeypoints: Keypoint[], onUpdate: (kps: Keypoint[]) => void) => {
   const [keypoints, setKeypoints] = useState<Keypoint[]>(initialKeypoints);
-  const [draggingIdx, setDraggingIdx] = useState<number | null>(null);
-  const keypointsRef = useRef<Keypoint[]>(initialKeypoints);
-  const hasPendingChangesRef = useRef(false);
-  const dragStateRef = useRef<DragState | null>(null);
+  const saveTimeoutRef = useRef<number | null>(null);
 
+  // 외부 데이터(initialKeypoints)가 들어오면 내부 상태를 즉시 동기화
   useEffect(() => {
-    setKeypoints(initialKeypoints);
-    keypointsRef.current = initialKeypoints;
-    hasPendingChangesRef.current = false;
+    setKeypoints(initialKeypoints || []);
   }, [initialKeypoints]);
 
   useEffect(() => {
-    keypointsRef.current = keypoints;
-  }, [keypoints]);
-
-  const handleStart = useCallback((x: number, y: number, target?: DragTarget) => {
-    const resolvedTarget = target ?? (() => {
-      const idx = keypoints.findIndex(kp => Math.hypot(kp.x - x, kp.y - y) < 0.05);
-      return idx !== -1 ? { type: 'joint', index: idx } as DragTarget : null;
-    })();
-
-    if (!resolvedTarget) return;
-
-    dragStateRef.current = {
-      target: resolvedTarget,
-      anchor: { x, y },
-      initialKeypoints: keypoints,
-    };
-
-    if (resolvedTarget.type === 'joint') {
-      setDraggingIdx(resolvedTarget.index);
-    } else {
-      setDraggingIdx(null);
-    }
-  }, [keypoints]);
-
-  const handleMove = useCallback((x: number, y: number) => {
-    const dragState = dragStateRef.current;
-    if (!dragState) return;
-
-    const newKps = [...dragState.initialKeypoints];
-
-    if (dragState.target.type === 'joint') {
-      const targetIndex = dragState.target.index;
-      newKps[targetIndex] = {
-        ...newKps[targetIndex],
-        x: clamp01(x),
-        y: clamp01(y),
-      };
-    } else {
-      const deltaX = x - dragState.anchor.x;
-      const deltaY = y - dragState.anchor.y;
-      
-      if (dragState.target.type === 'global') {
-        dragState.initialKeypoints.forEach((_, index) => {
-          newKps[index] = {
-            ...dragState.initialKeypoints[index],
-            x: clamp01(dragState.initialKeypoints[index].x + deltaX),
-            y: clamp01(dragState.initialKeypoints[index].y + deltaY),
-          };
-        });
-      } else {
-        dragState.target.indices.forEach((index) => {
-          newKps[index] = {
-            ...newKps[index],
-            x: clamp01(dragState.initialKeypoints[index].x + deltaX),
-            y: clamp01(dragState.initialKeypoints[index].y + deltaY),
-          };
-        });
+    return () => {
+      if (saveTimeoutRef.current) {
+        window.clearTimeout(saveTimeoutRef.current);
+        saveTimeoutRef.current = null;
       }
-    }
-
-    setKeypoints(newKps);
-    keypointsRef.current = newKps;
-    hasPendingChangesRef.current = true;
+    };
   }, []);
 
-  const scaleAll = useCallback((factor: number) => {
-    if (keypoints.length === 0) return;
-    
-    // Find center of all keypoints
-    const centerX = keypoints.reduce((sum, kp) => sum + kp.x, 0) / keypoints.length;
-    const centerY = keypoints.reduce((sum, kp) => sum + kp.y, 0) / keypoints.length;
+  // 3D 공간에서 전달된 변경된 위치(Vector3)를 정규화 좌표(0~1)로 복원하여 저장
+  // isFinal이 true일 때만 서버 업데이트(onUpdate)를 트리거하여 네트워크 부하 최적화
+  const handleUpdateKeypoint3D = useCallback((index: number, newPos: THREE.Vector3, isFinal: boolean) => {
+    setKeypoints(prev => {
+      const next = [...prev];
+      if (!next[index]) return prev;
 
-    const newKps = keypoints.map(kp => ({
-      ...kp,
-      x: clamp01(centerX + (kp.x - centerX) * factor),
-      y: clamp01(centerY + (kp.y - centerY) * factor),
-    }));
+      // CanvasEditor에서의 변환 로직을 역산
+      // worldX = (x - 0.5) * 6  =>  x = (worldX / 6) + 0.5
+      // worldY = -(y - 0.5) * 8 =>  y = -(worldY / 8) + 0.5
+      const updatedKp = {
+        ...next[index],
+        x: (newPos.x / 6) + 0.5,
+        y: -(newPos.y / 8) + 0.5,
+        z: (newPos.z / 0.8)
+      };
+      
+      next[index] = updatedKp;
 
-    setKeypoints(newKps);
-    onUpdate(newKps);
-  }, [keypoints, onUpdate]);
-
-  const handleEnd = useCallback(() => {
-    if (dragStateRef.current && hasPendingChangesRef.current) {
-      onUpdate(keypointsRef.current);
-      hasPendingChangesRef.current = false;
-    }
-    dragStateRef.current = null;
-    setDraggingIdx(null);
+      // 같은 조작 종료 안에서 여러 관절이 순차 갱신돼도 서버 저장은 1회로 합친다.
+      if (isFinal) {
+        if (saveTimeoutRef.current) {
+          window.clearTimeout(saveTimeoutRef.current);
+        }
+        saveTimeoutRef.current = window.setTimeout(() => {
+          onUpdate(next);
+          saveTimeoutRef.current = null;
+        }, 0);
+      }
+      
+      return next;
+    });
   }, [onUpdate]);
 
-  return { keypoints, draggingIdx, handleStart, handleMove, handleEnd, scaleAll };
+  return { keypoints, handleUpdateKeypoint3D };
 };
