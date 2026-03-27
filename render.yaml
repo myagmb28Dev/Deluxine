@@ -10,8 +10,6 @@ services:
     envVars:
       - key: PORT
         value: "3000"
-      - key: NODE_ENV
-        value: "production"
       - key: ENABLE_QUEUE_PROCESSORS
         value: "true"
 

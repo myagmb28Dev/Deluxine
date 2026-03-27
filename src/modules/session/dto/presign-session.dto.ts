@@ -1,6 +1,6 @@
-import { ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsInt, IsNotEmpty, IsNumber, IsOptional, IsString, MaxLength, Min } from 'class-validator';
 
 export class PresignSessionDto {
   @ApiPropertyOptional({ example: '무릎 포즈 실험 #1' })
@@ -16,9 +16,15 @@ export class PresignSessionDto {
   @IsString()
   contentType?: string;
 
-  @ApiPropertyOptional({ example: 'line.png', description: '원본 파일명(확장자 추정용)' })
-  @IsOptional()
+  @ApiProperty({ example: 'line.png', description: '원본 파일명(확장자 추정용)' })
   @IsString()
-  originalFilename?: string;
-}
+  @IsNotEmpty()
+  filename!: string;
 
+  @ApiProperty({ example: 123456, description: '파일 크기(bytes)' })
+  @Transform(({ value }) => (typeof value === 'string' ? Number(value) : value))
+  @IsNumber()
+  @IsInt()
+  @Min(1)
+  size!: number;
+}

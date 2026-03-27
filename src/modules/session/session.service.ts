@@ -60,13 +60,22 @@ export class SessionService {
     userId: string;
     title?: string;
     contentType?: string;
-    originalFilename?: string;
+    filename?: string;
+    size?: number;
   }) {
     const session = await this.create({ userId: input.userId, title: input.title });
 
-    const extension = extname(input.originalFilename || '') || (input.contentType === 'image/jpeg' ? '.jpg' : '.png');
+    const extension = extname(input.filename || '') || (input.contentType === 'image/jpeg' ? '.jpg' : '.png');
     session.lineArtKey = this.buildLineArtKey(input.userId, session.id, extension);
-    session.history.push({ timestamp: this.toKSTISO(), action: 'session.line_art_presigned' });
+    session.history.push({
+      timestamp: this.toKSTISO(),
+      action: 'session.line_art_presigned',
+      payload: {
+        filename: input.filename ?? null,
+        size: typeof input.size === 'number' ? input.size : null,
+        contentType: input.contentType ?? null,
+      },
+    });
 
     const updated = await this.sessionRepository.save(session);
     await this.redisService.set(RedisKeys.sessionCache(session.id), updated, this.CACHE_TTL);

@@ -26,7 +26,8 @@ export class SessionController {
       userId: req.user.id,
       title: dto.title,
       contentType: dto.contentType,
-      originalFilename: dto.originalFilename,
+      filename: dto.filename,
+      size: dto.size,
     });
 
     return {
