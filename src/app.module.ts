@@ -17,10 +17,15 @@ import { RenderModule } from './modules/render/render.module';
 import { SessionModule } from './modules/session/session.module';
 import { FirebaseModule } from './modules/firebase/firebase.module';
 
+const isProduction = (process.env.NODE_ENV ?? 'development') === 'production';
+
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
+      // Local: load .env.local then .env
+      // Production (Render): rely on platform env vars (ignore .env files)
+      ignoreEnvFile: isProduction,
       envFilePath: '.env',
       load: [appConfig, databaseConfig, redisConfig],
     }),

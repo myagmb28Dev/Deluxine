@@ -30,7 +30,8 @@ async function bootstrap() {
   app.useGlobalFilters(new AllExceptionsFilter(httpAdapter));
 
   app.enableCors({
-    origin: configService.get<string>('app.corsOrigin') ?? '*',
+    // app.corsOrigin supports '*' or an array of allowed origins (comma-separated via env CORS_ORIGIN)
+    origin: configService.get('app.corsOrigin') ?? '*',
   });
 
   const swaggerConfig = new DocumentBuilder()
