@@ -9,6 +9,7 @@ import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import appConfig from './config/app.config';
 import databaseConfig from './config/database.config';
 import redisConfig from './config/redis.config';
+import { HealthController } from './health.controller';
 import { AuthModule } from './modules/auth/auth.module';
 import { PoseModule } from './modules/pose/pose.module';
 import { RedisModule } from './modules/redis/redis.module';
@@ -110,7 +111,7 @@ import { FirebaseModule } from './modules/firebase/firebase.module';
     RenderModule,
     FirebaseModule,
   ],
-  controllers: [],
+  controllers: [HealthController],
   providers: [
     {
       provide: APP_GUARD,

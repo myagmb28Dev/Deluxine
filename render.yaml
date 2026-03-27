@@ -6,7 +6,7 @@ services:
     dockerContext: .
     plan: starter
     autoDeploy: true
-    healthCheckPath: /docs
+    healthCheckPath: /health
     envVars:
       - key: PORT
         value: "3000"
