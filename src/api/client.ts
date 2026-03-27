@@ -9,6 +9,8 @@ import type {
   PoseStatusResponse,
   RenderJobResponse,
   SessionDto,
+  SessionPresignRequest,
+  SessionPresignResponse,
   SessionListQuery,
   SessionListResponse,
   SessionListItem,
@@ -51,11 +53,39 @@ export const authApi = {
 
 export const sessionApi = {
   create: (file: File) => {
-    const formData = new FormData();
-    formData.append('file', file);
-    return api.post<SessionDto>('/sessions', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' }
-    }).then(res => res.data);
+    return sessionApi.createViaPresignedUpload(file);
+  },
+  createViaPresignedUpload: async (file: File) => {
+    const contentType = file.type || 'application/octet-stream';
+    const payload: SessionPresignRequest = {
+      filename: file.name,
+      contentType,
+      size: file.size,
+    };
+
+    const presign = await api.post<SessionPresignResponse>('/sessions/presign', payload).then((res) => res.data);
+
+    if (presign.upload.method !== 'PUT') {
+      throw new Error(`Unsupported upload method: ${presign.upload.method}`);
+    }
+
+    const uploadHeaders: Record<string, string> = {
+      ...(presign.upload.headers ?? {}),
+    };
+
+    if (!uploadHeaders['Content-Type'] && !uploadHeaders['content-type']) {
+      uploadHeaders['Content-Type'] = contentType;
+    }
+
+    await axios.put(presign.upload.url, file, {
+      headers: uploadHeaders,
+    });
+
+    // Let backend start processing after upload finishes (recommended for R2 private buckets).
+    await api.post(`/sessions/${presign.session.id}/uploads/complete`, { kind: 'line_art' });
+
+    // Fetch again so we get the latest signed URLs / timestamps after completion.
+    return api.get<SessionDto>(`/sessions/${presign.session.id}`).then((res) => res.data);
   },
   getById: (id: string) => api.get<SessionDto>(`/sessions/${id}`).then(res => res.data),
   list: (query: SessionListQuery = { limit: 30 }) => api.get<SessionListResponse>('/sessions', { params: query }).then(res => res.data),

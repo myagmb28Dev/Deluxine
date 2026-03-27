@@ -20,6 +20,23 @@ export type SessionDto = {
   updatedAt: string;
 };
 
+export type PresignedPutUpload = {
+  method: 'PUT';
+  url: string;
+  headers?: Record<string, string>;
+};
+
+export type SessionPresignRequest = {
+  filename: string;
+  contentType: string;
+  size: number;
+};
+
+export type SessionPresignResponse = {
+  session: SessionDto;
+  upload: PresignedPutUpload;
+};
+
 export type Keypoint = {
   name: string;
   x: number;
