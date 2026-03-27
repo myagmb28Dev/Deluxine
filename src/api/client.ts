@@ -18,8 +18,17 @@ import type {
   PoseEditorState,
 } from '../types/api';
 
+const normalizeBaseUrl = (value: string) => value.replace(/\/+$/, '');
+
+const resolveApiBaseUrl = () => {
+  const fromEnv = import.meta.env.VITE_API_BASE_URL?.trim();
+  if (fromEnv) return normalizeBaseUrl(fromEnv);
+  if (import.meta.env.DEV) return 'http://localhost:3000';
+  return '';
+};
+
 const api = axios.create({
-  baseURL: '/',
+  baseURL: resolveApiBaseUrl(),
   headers: { 'Content-Type': 'application/json' },
 });
 
