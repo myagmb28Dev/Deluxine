@@ -1,8 +1,13 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsBoolean, IsNumber, IsOptional, Min } from 'class-validator';
+import { IsBoolean, IsNumber, IsOptional, IsString, Min } from 'class-validator';
 
 export class UploadCompleteDto {
+  @ApiPropertyOptional({ example: 'line_art', description: '프론트 업로드 종류(현재 엔드포인트에서는 참고용)' })
+  @IsOptional()
+  @IsString()
+  kind?: string;
+
   @ApiPropertyOptional({ example: 7, description: '희망 등신대 (0은 AUTO)' })
   @IsOptional()
   @Transform(({ value }) => (value === undefined || value === null || value === '' ? undefined : Number(value)))
@@ -16,4 +21,3 @@ export class UploadCompleteDto {
   @IsBoolean()
   force?: boolean;
 }
-
