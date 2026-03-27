@@ -10,6 +10,8 @@ import { PosesController } from './poses.controller';
 import { PoseService } from './pose.service';
 import { PoseProcessor } from './pose.processor';
 
+const enableQueueProcessors = (process.env.ENABLE_QUEUE_PROCESSORS ?? 'true') !== 'false';
+
 @Module({
   imports: [
     TypeOrmModule.forFeature([Pose]),
@@ -21,7 +23,7 @@ import { PoseProcessor } from './pose.processor';
     }),
   ],
   controllers: [PoseController, PosesController],
-  providers: [PoseService, PoseProcessor],
+  providers: [PoseService, ...(enableQueueProcessors ? [PoseProcessor] : [])],
   exports: [PoseService],
 })
 export class PoseModule {}

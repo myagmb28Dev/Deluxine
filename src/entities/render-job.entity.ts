@@ -13,8 +13,11 @@ export class RenderJob {
   @Column({ type: 'text' })
   prompt: string;
 
+  @Column({ type: 'varchar', length: 700, nullable: true })
+  outputImageKey: string | null;
+
   @Column({ type: 'varchar', length: 500, nullable: true })
-  outputImageUrl: string;
+  outputImageUrl: string | null;
 
   @Index()
   @Column({ type: 'varchar', length: 50, default: 'pending' })

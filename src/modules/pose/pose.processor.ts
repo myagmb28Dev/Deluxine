@@ -28,7 +28,7 @@ export class PoseProcessor extends WorkerHost {
     super();
   }
 
-  async process(job: Job<{ sessionId: string; lineArtUrl: string; targetRatio?: number }>): Promise<any> {
+  async process(job: Job<{ sessionId: string; lineArtKey?: string | null; targetRatio?: number }>): Promise<any> {
     const { sessionId, targetRatio } = job.data;
     this.logger.log(`Generating pose for session: ${sessionId}`);
 

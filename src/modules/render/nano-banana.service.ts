@@ -2,16 +2,13 @@ import { Injectable, Logger } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
-import { mkdir, readFile, writeFile } from 'fs/promises';
-import { join } from 'path';
-import { randomUUID } from 'crypto';
 
 export interface RenderRequest {
-  line_art: string;  // 로컬 파일 경로 (예: /uploads/file.png)
+  lineArtBase64: string;
+  lineArtMimeType: string;
   pose_data: any;    // 수정된 포즈 데이터 (JSON)
   pose_projection_image?: string; // 프론트에서 캡처한 포즈 투영 이미지(data URL)
   prompt: string;    // 사용자 프롬프트
-  output_dir: string;
 }
 
 @Injectable()
@@ -43,13 +40,6 @@ export class NanoBananaService {
     const model = this.configService.get<string>('NANO_BANANA_MODEL');
     const apiKey = this.configService.get<string>('NANO_BANANA_API_KEY');
 
-    // 1. 선화 파일 읽기 및 Base64 변환
-    const absolutePath = join(process.cwd(), request.line_art.replace(/^\/+/, ''));
-    const lineArtBase64 = await readFile(absolutePath, { encoding: 'base64' });
-    const mimeType = absolutePath.toLowerCase().endsWith('.jpg') || absolutePath.toLowerCase().endsWith('.jpeg')
-      ? 'image/jpeg'
-      : 'image/png';
-
     this.logger.log(`Requesting Gemini Image Generation (Nano Banana Pro mode)...`);
 
     // 429 방지를 위해 API 호출 전 아주 짧은 간격(500ms) 추가
@@ -60,8 +50,8 @@ export class NanoBananaService {
     const parts: Array<Record<string, unknown>> = [
       {
         inlineData: {
-          mimeType,
-          data: lineArtBase64,
+          mimeType: request.lineArtMimeType,
+          data: request.lineArtBase64,
         },
       },
     ];
@@ -131,15 +121,6 @@ export class NanoBananaService {
       if (!base64Data) {
         throw new Error('NO_IMAGE_DATA');
       }
-      
-      // 4. 결과 파일 저장
-      const fileName = `render-${randomUUID()}.png`;
-      const outputDirectory = join(process.cwd(), request.output_dir.replace(/^\/+/, ''));
-      await mkdir(outputDirectory, { recursive: true });
-      const outputPath = join(outputDirectory, fileName);
-      await writeFile(outputPath, Buffer.from(base64Data, 'base64'));
-
-      this.logger.log(`Image rendered and saved as: ${fileName}`);
 
       // 할당량 정보가 헤더에 있는지 확인 로그 추가
       if (response.headers) {
@@ -152,7 +133,7 @@ export class NanoBananaService {
       }
 
       return {
-        outputImage: `${request.output_dir}/${fileName}`,
+        outputImageBase64: base64Data,
         generationTime: new Date().toISOString(),
       };
     } catch (error) {

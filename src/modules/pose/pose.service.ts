@@ -77,7 +77,7 @@ export class PoseService {
 
     // 1. 세션에서 선화 URL 조회
     const session = await this.sessionService.findById(sessionId);
-    const lineArtUrl = session?.lineArtUrl || 'line.png';
+    const lineArtKey = session?.lineArtKey ?? null;
 
     // 2. 상태 설정 (대기 중) 및 진행률 초기화
     await this.redisService.set(RedisKeys.sessionCurrentPose(sessionId), 'pending', 600);
@@ -87,7 +87,7 @@ export class PoseService {
     this.logger.log(`Enqueuing pose generation for session ${sessionId} (targetRatio: ${targetRatio})`);
     await this.poseQueue.add('generate-pose', {
       sessionId,
-      lineArtUrl,
+      lineArtKey,
       targetRatio: targetRatio || 0,
     }, {
       jobId: `pose-${sessionId}`,

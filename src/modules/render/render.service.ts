@@ -6,20 +6,18 @@ import { Queue } from 'bullmq';
 import { RenderJob } from '../../entities/render-job.entity';
 import { RedisKeys } from '../redis/redis.keys';
 import { RedisService } from '../redis/redis.service';
+import { R2Service } from '../r2/r2.service';
 
 @Injectable()
 export class RenderService {
   private readonly logger = new Logger(RenderService.name);
   private readonly STATUS_TTL = 7200; // 2시간
 
-  private getRenderPublicDirectory(userId: string, sessionId: string) {
-    return `/uploads/users/${userId}/sessions/${sessionId}/renders`;
-  }
-
   constructor(
     @InjectRepository(RenderJob)
     private readonly renderJobRepository: Repository<RenderJob>,
     private readonly redisService: RedisService,
+    private readonly r2Service: R2Service,
     @InjectQueue('render')
     private readonly renderQueue: Queue,
   ) {}
@@ -27,7 +25,7 @@ export class RenderService {
   async render(input: {
     sessionId: string;
     userId: string;
-    lineArt: string;
+    lineArtKey: string;
     chosenPose: any;
     prompt: string;
     poseProjectionImage?: string;
@@ -37,8 +35,10 @@ export class RenderService {
       sessionId: input.sessionId,
       prompt: input.prompt,
       status: 'pending',
+      outputImageKey: null,
+      outputImageUrl: null,
       metadata: {
-        line_art: input.lineArt,
+        line_art_key: input.lineArtKey,
         chosen_pose: input.chosenPose,
         has_pose_projection_image: Boolean(input.poseProjectionImage),
         history: input.history,
@@ -55,11 +55,10 @@ export class RenderService {
       jobId: saved.id,
       sessionId: input.sessionId,
       userId: input.userId,
-      lineArt: input.lineArt,
+      lineArtKey: input.lineArtKey,
       chosenPose: input.chosenPose,
       prompt: input.prompt,
       poseProjectionImage: input.poseProjectionImage,
-      outputDir: this.getRenderPublicDirectory(input.userId, input.sessionId),
     }, {
       jobId: saved.id,
       attempts: 5, // 재시도 횟수 증가
@@ -73,11 +72,15 @@ export class RenderService {
       job_id: saved.id,
       status: 'pending',
       message: 'Render job has been enqueued successfully.',
-      line_art: input.lineArt,
+      line_art_key: input.lineArtKey,
       chosen_pose: input.chosenPose,
       prompt_used: saved.prompt,
       history: input.history,
     };
+  }
+
+  async presignOutputGet(outputKey: string) {
+    return (await this.r2Service.presignGet(outputKey)).url;
   }
 
   async updateJobStatus(jobId: string, status: string) {

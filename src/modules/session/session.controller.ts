@@ -1,9 +1,8 @@
-import { Body, Controller, Delete, ForbiddenException, Get, HttpCode, NotFoundException, Param, Patch, Post, Query, Req, UploadedFile, UseInterceptors, UseGuards } from '@nestjs/common';
-import { ApiOperation, ApiTags, ApiConsumes, ApiBody, ApiBearerAuth } from '@nestjs/swagger';
-import { FileInterceptor } from '@nestjs/platform-express';
-import { memoryStorage } from 'multer';
-import { CreateSessionDto } from './dto/create-session.dto';
+import { Body, Controller, Delete, ForbiddenException, Get, HttpCode, NotFoundException, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { ApiOperation, ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { ListSessionsDto } from './dto/list-sessions.dto';
+import { PresignSessionDto } from './dto/presign-session.dto';
+import { UploadCompleteDto } from './dto/upload-complete.dto';
 import { UpdateSessionDto } from './dto/update-session.dto';
 import { SessionService } from './session.service';
 import { FirebaseAuthGuard } from '../auth/guards/firebase-auth.guard';
@@ -20,60 +19,42 @@ export class SessionController {
     private readonly poseService: PoseService,
   ) {}
 
-  @Post()
-  @UseInterceptors(FileInterceptor('file', {
-    storage: memoryStorage(),
-  }))
-  @ApiConsumes('multipart/form-data')
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        file: {
-          type: 'string',
-          format: 'binary',
-        },
-        title: {
-          type: 'string',
-          example: '점프 구도 실험 A안',
-        },
-        targetRatio: {
-          type: 'number',
-          example: 7,
-          description: '희망 등신대 (0은 AUTO)',
-        },
-      },
-    },
-  })
-  @ApiOperation({ summary: '선화 업로드 및 세션 생성' })
-  async create(
-    @UploadedFile() file: Express.Multer.File,
-    @Body() dto: CreateSessionDto,
-    @Req() req: { user: User },
-  ) {
-    const session = await this.sessionService.create({
+  @Post('presign')
+  @ApiOperation({ summary: '세션 생성 + 선화 업로드용 presigned PUT 발급' })
+  async presign(@Body() dto: PresignSessionDto, @Req() req: { user: User }) {
+    const { session, upload } = await this.sessionService.createLineArtPresign({
       userId: req.user.id,
       title: dto.title,
+      contentType: dto.contentType,
+      originalFilename: dto.originalFilename,
     });
 
-    if (file) {
-      const updatedSession = await this.sessionService.attachLineArtFile(session, file);
-      
-      // 파일 업로드 후 자동으로 포즈 생성 시작
-      try {
-        const generation = await this.poseService.generate(updatedSession.id, dto.targetRatio);
-        if ((generation as { enqueued?: boolean }).enqueued) {
-          await this.sessionService.appendHistory(updatedSession.id, 'pose.auto_generation_requested');
-        }
-      } catch (error) {
-        // 포즈 생성 실패해도 세션은 반환 (사용자가 나중에 다시 시도할 수 있음)
-        console.error('Auto pose generation failed:', error);
+    return {
+      session,
+      upload,
+    };
+  }
+
+  @Post(':id/uploads/complete')
+  @ApiOperation({ summary: 'R2 업로드 완료 알림 + 포즈 생성 시작 트리거' })
+  async uploadComplete(@Param('id') id: string, @Body() dto: UploadCompleteDto, @Req() req: { user: User }) {
+    const session = await this.sessionService.confirmLineArtUpload(id, req.user.id);
+    if (!session) {
+      if (await this.sessionService.exists(id)) {
+        throw new ForbiddenException('forbidden');
       }
-      
-      return updatedSession;
+      throw new NotFoundException('session not found');
     }
 
-    return session;
+    const generation = await this.poseService.generate(id, dto.targetRatio, dto.force ?? false);
+    if ((generation as { enqueued?: boolean }).enqueued) {
+      await this.sessionService.appendHistory(id, 'pose.auto_generation_requested');
+    }
+
+    return {
+      session: await this.sessionService.presentSession(session),
+      pose: generation,
+    };
   }
 
   @Get()
@@ -93,7 +74,7 @@ export class SessionController {
       throw new NotFoundException('session not found');
     }
 
-    return session;
+    return this.sessionService.presentSession(session);
   }
 
   @Patch(':id')

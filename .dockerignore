@@ -1,0 +1,12 @@
+dist
+node_modules
+.git
+.idea
+.npm-cache
+.venv
+coverage
+secrets
+.env
+.env.*
+*.log
+

@@ -23,7 +23,7 @@ describe('PoseService (Async Queue Test)', () => {
   };
 
   const mockSessionService = {
-    findById: jest.fn().mockResolvedValue({ id: 'session-123', lineArtUrl: '/uploads/line.png' }),
+    findById: jest.fn().mockResolvedValue({ id: 'session-123', lineArtKey: 'uploads/line.png' }),
   };
 
   const mockPoseQueue = {
@@ -65,7 +65,7 @@ describe('PoseService (Async Queue Test)', () => {
     // 1. 큐에 작업이 추가되었는지 확인
     expect(poseQueue.add).toHaveBeenCalledWith(
       'generate-pose',
-      expect.objectContaining({ sessionId, lineArtUrl: '/uploads/line.png' }),
+      expect.objectContaining({ sessionId, lineArtKey: 'uploads/line.png' }),
       expect.anything(),
     );
 

@@ -13,8 +13,11 @@ export class Session {
   @Column({ type: 'varchar', length: 120, nullable: true })
   title: string | null;
 
+  @Column({ type: 'varchar', length: 700, nullable: true })
+  lineArtKey: string | null;
+
   @Column({ type: 'varchar', length: 500, nullable: true })
-  lineArtUrl: string;
+  lineArtUrl: string | null;
 
   @Column({ type: 'jsonb', default: [] })
   history: Array<{ timestamp: string; action: string; payload?: Record<string, unknown> }>;

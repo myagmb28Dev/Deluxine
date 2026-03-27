@@ -6,10 +6,13 @@ import { RenderJob } from '../../entities/render-job.entity';
 import { PoseModule } from '../pose/pose.module';
 import { SessionModule } from '../session/session.module';
 import { AuthModule } from '../auth/auth.module';
+import { R2Module } from '../r2/r2.module';
 import { RenderController } from './render.controller';
 import { RenderService } from './render.service';
 import { NanoBananaService } from './nano-banana.service';
 import { RenderProcessor } from './render.processor';
+
+const enableQueueProcessors = (process.env.ENABLE_QUEUE_PROCESSORS ?? 'true') !== 'false';
 
 @Module({
   imports: [
@@ -17,12 +20,13 @@ import { RenderProcessor } from './render.processor';
     SessionModule,
     PoseModule,
     AuthModule,
+    R2Module,
     HttpModule,
     BullModule.registerQueue({
       name: 'render',
     }),
   ],
   controllers: [RenderController],
-  providers: [RenderService, NanoBananaService, RenderProcessor],
+  providers: [RenderService, NanoBananaService, ...(enableQueueProcessors ? [RenderProcessor] : [])],
 })
 export class RenderModule {}

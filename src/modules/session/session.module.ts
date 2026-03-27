@@ -9,12 +9,14 @@ import { SessionEventsController } from './session-events.controller';
 import { SessionService } from './session.service';
 import { AuthModule } from '../auth/auth.module';
 import { PoseModule } from '../pose/pose.module';
+import { R2Module } from '../r2/r2.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Session, Pose, RenderJob]),
     BullModule.registerQueue({ name: 'render' }),
     AuthModule,
+    R2Module,
     forwardRef(() => PoseModule),
   ],
   controllers: [SessionController, SessionEventsController],

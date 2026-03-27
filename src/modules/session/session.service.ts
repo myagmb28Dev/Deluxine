@@ -3,25 +3,22 @@ import { Queue } from 'bullmq';
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, Repository } from 'typeorm';
-import { mkdir, rm, writeFile } from 'fs/promises';
-import { extname, join } from 'path';
+import { extname } from 'path';
+import { randomUUID } from 'crypto';
 import { Session } from '../../entities/session.entity';
 import { Pose } from '../../entities/pose.entity';
 import { RenderJob } from '../../entities/render-job.entity';
 import { ListSessionsDto } from './dto/list-sessions.dto';
 import { RedisKeys } from '../redis/redis.keys';
 import { RedisService } from '../redis/redis.service';
+import { R2Service } from '../r2/r2.service';
 
 @Injectable()
 export class SessionService {
   private readonly CACHE_TTL = 3600; // 1시간
 
-  private getSessionDirectory(userId: string, sessionId: string) {
-    return join(process.cwd(), 'uploads', 'users', userId, 'sessions', sessionId);
-  }
-
-  private getSessionPublicPath(userId: string, sessionId: string) {
-    return `/uploads/users/${userId}/sessions/${sessionId}`;
+  private toKSTISO() {
+    return new Date(new Date().getTime() + (9 * 60 * 60 * 1000)).toISOString().replace('Z', '+09:00');
   }
 
   constructor(
@@ -34,14 +31,21 @@ export class SessionService {
     @InjectQueue('render')
     private readonly renderQueue: Queue,
     private readonly redisService: RedisService,
+    private readonly r2Service: R2Service,
   ) {}
 
-  async create(input: { userId: string; lineArtUrl?: string; title?: string }) {
+  private buildLineArtKey(userId: string, sessionId: string, extension: string) {
+    const ext = extension?.startsWith('.') ? extension : `.${extension || 'png'}`;
+    return this.r2Service.buildKey(['users', userId, 'sessions', sessionId, `line-art-${randomUUID()}${ext}`]);
+  }
+
+  async create(input: { userId: string; title?: string }) {
     const session = this.sessionRepository.create({
       userId: input.userId,
       title: input.title?.trim() || null,
-      lineArtUrl: input.lineArtUrl ?? 'line.png',
-      history: [{ timestamp: new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Seoul' }).replace(' ', 'T'), action: 'session.created' }],
+      lineArtKey: null,
+      lineArtUrl: null,
+      history: [{ timestamp: this.toKSTISO(), action: 'session.created' }],
     });
 
     const saved = await this.sessionRepository.save(session);
@@ -52,28 +56,45 @@ export class SessionService {
     return saved;
   }
 
-  async attachLineArtFile(session: Session, file: Express.Multer.File) {
-    if (!session.userId) {
-      return session;
-    }
+  async createLineArtPresign(input: {
+    userId: string;
+    title?: string;
+    contentType?: string;
+    originalFilename?: string;
+  }) {
+    const session = await this.create({ userId: input.userId, title: input.title });
 
-    const sessionDirectory = this.getSessionDirectory(session.userId, session.id);
-    await mkdir(sessionDirectory, { recursive: true });
-
-    const fileExtension = extname(file.originalname || '') || '.png';
-    const fileName = `line-art${fileExtension}`;
-    const filePath = join(sessionDirectory, fileName);
-
-    await writeFile(filePath, file.buffer);
-
-    session.lineArtUrl = `${this.getSessionPublicPath(session.userId, session.id)}/${fileName}`;
-    const toKSTISO = () => new Date(new Date().getTime() + (9 * 60 * 60 * 1000)).toISOString().replace('Z', '+09:00');
-    session.history.push({ timestamp: toKSTISO(), action: 'session.line_art_uploaded' });
+    const extension = extname(input.originalFilename || '') || (input.contentType === 'image/jpeg' ? '.jpg' : '.png');
+    session.lineArtKey = this.buildLineArtKey(input.userId, session.id, extension);
+    session.history.push({ timestamp: this.toKSTISO(), action: 'session.line_art_presigned' });
 
     const updated = await this.sessionRepository.save(session);
     await this.redisService.set(RedisKeys.sessionCache(session.id), updated, this.CACHE_TTL);
 
+    const upload = await this.r2Service.presignPut(updated.lineArtKey!, input.contentType);
+    return { session: updated, upload };
+  }
+
+  async confirmLineArtUpload(sessionId: string, userId: string) {
+    const session = await this.findById(sessionId, userId);
+    if (!session) {
+      return null;
+    }
+    if (!session.lineArtKey) {
+      throw new Error('NO_LINE_ART_KEY');
+    }
+
+    await this.r2Service.headObject(session.lineArtKey);
+    session.history.push({ timestamp: this.toKSTISO(), action: 'session.line_art_upload_confirmed' });
+
+    const updated = await this.sessionRepository.save(session);
+    await this.redisService.set(RedisKeys.sessionCache(sessionId), updated, this.CACHE_TTL);
     return updated;
+  }
+
+  async presentSession(session: Session) {
+    const lineArtUrl = session.lineArtKey ? (await this.r2Service.presignGet(session.lineArtKey)).url : null;
+    return { ...session, lineArtUrl };
   }
 
   async findById(id: string, userId?: string) {
@@ -208,7 +229,7 @@ export class SessionService {
       session.title = input.title.trim() || null;
     }
 
-    session.history.push({ timestamp: new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Seoul' }).replace(' ', 'T'), action: 'session.updated' });
+    session.history.push({ timestamp: this.toKSTISO(), action: 'session.updated' });
     const updated = await this.sessionRepository.save(session);
     await this.redisService.set(RedisKeys.sessionCache(id), updated, this.CACHE_TTL);
 
@@ -233,10 +254,16 @@ export class SessionService {
     await this.renderJobRepository.delete({ sessionId: id });
     await this.sessionRepository.delete({ id });
 
-    if (session.userId) {
-      const sessionDirectory = this.getSessionDirectory(session.userId, id);
-      await rm(sessionDirectory, { recursive: true, force: true });
+    const keysToDelete: string[] = [];
+    if (session.lineArtKey) {
+      keysToDelete.push(session.lineArtKey);
     }
+    for (const job of renderJobs) {
+      if (job.outputImageKey) {
+        keysToDelete.push(job.outputImageKey);
+      }
+    }
+    await this.r2Service.deleteObjects(keysToDelete);
 
     await this.invalidateCache(id);
     return true;
@@ -248,7 +275,7 @@ export class SessionService {
       return null;
     }
 
-    session.history.push({ timestamp: new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Seoul' }).replace(' ', 'T'), action });
+    session.history.push({ timestamp: this.toKSTISO(), action });
     const updated = await this.sessionRepository.save(session);
 
     // 캐시 갱신

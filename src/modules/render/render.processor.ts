@@ -3,10 +3,12 @@ import { Job } from 'bullmq';
 import { Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { randomUUID } from 'crypto';
 import { RenderJob } from '../../entities/render-job.entity';
 import { NanoBananaService } from './nano-banana.service';
 import { RedisService } from '../redis/redis.service';
 import { RedisKeys } from '../redis/redis.keys';
+import { R2Service } from '../r2/r2.service';
 
 @Processor('render')
 export class RenderProcessor extends WorkerHost {
@@ -18,12 +20,13 @@ export class RenderProcessor extends WorkerHost {
     private readonly renderJobRepository: Repository<RenderJob>,
     private readonly nanoBananaService: NanoBananaService,
     private readonly redisService: RedisService,
+    private readonly r2Service: R2Service,
   ) {
     super();
   }
 
   async process(job: Job<any, any, string>): Promise<any> {
-    const { jobId, lineArt, chosenPose, prompt, poseProjectionImage, outputDir } = job.data;
+    const { jobId, sessionId, userId, lineArtKey, chosenPose, prompt, poseProjectionImage } = job.data;
     this.logger.log(`Processing render job: ${jobId}`);
 
     const renderJob = await this.renderJobRepository.findOne({ where: { id: jobId } });
@@ -39,22 +42,33 @@ export class RenderProcessor extends WorkerHost {
       await this.redisService.set(RedisKeys.renderJobStatus(jobId), 'running', this.STATUS_TTL);
 
       // 2. Nano Banana AI 엔진 호출 (진짜 연동)
+      const lineArtBuffer = await this.r2Service.getObjectBuffer(lineArtKey);
+      const lineArtMimeType = String(lineArtKey || '').toLowerCase().endsWith('.jpg') || String(lineArtKey || '').toLowerCase().endsWith('.jpeg')
+        ? 'image/jpeg'
+        : 'image/png';
+
       const renderResult = await this.nanoBananaService.render({
-        line_art: lineArt,
+        lineArtBase64: lineArtBuffer.toString('base64'),
+        lineArtMimeType,
         pose_data: chosenPose,
-        prompt: prompt,
+        prompt,
         pose_projection_image: poseProjectionImage,
-        output_dir: outputDir,
+      });
+
+      const outputKey = this.r2Service.buildKey(['users', userId, 'sessions', sessionId, 'renders', `render-${randomUUID()}.png`]);
+      await this.r2Service.putObject(outputKey, Buffer.from(renderResult.outputImageBase64, 'base64'), {
+        contentType: 'image/png',
       });
 
       // 3. 결과 저장 및 상태 변경: 완료
       renderJob.status = 'completed';
-      renderJob.outputImageUrl = renderResult.outputImage;
+      renderJob.outputImageKey = outputKey;
+      renderJob.outputImageUrl = null;
       await this.renderJobRepository.save(renderJob);
       await this.redisService.set(RedisKeys.renderJobStatus(jobId), 'completed', this.STATUS_TTL);
 
       this.logger.log(`Render job ${jobId} completed successfully`);
-      return renderResult;
+      return { outputImageKey: outputKey, generationTime: renderResult.generationTime };
     } catch (error) {
       this.logger.error(`Render job ${jobId} failed: ${error.message}`);
       

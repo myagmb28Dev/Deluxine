@@ -25,6 +25,9 @@ export class RenderController {
     if (!session) {
       throw new NotFoundException('session not found');
     }
+    if (!session.lineArtKey) {
+      throw new NotFoundException('line art not uploaded');
+    }
 
     const pose = await this.poseService.findBySessionId(sessionId);
     if (!pose) {
@@ -37,7 +40,7 @@ export class RenderController {
     return this.renderService.render({
       sessionId,
       userId: req.user.id,
-      lineArt: session.lineArtUrl,
+      lineArtKey: session.lineArtKey,
       chosenPose: pose, // keypoints 배열이 아닌 pose 객체 전체를 전달
       prompt: dto.prompt,
       poseProjectionImage: dto.poseProjectionImage,
@@ -75,7 +78,7 @@ export class RenderController {
     return {
       job_id: job.id,
       status: statusFromCache || job.status, // 캐시 상태를 DB 상태보다 우선 적용
-      output_image: job.outputImageUrl,
+      output_image: job.outputImageKey ? await this.renderService.presignOutputGet(job.outputImageKey) : null,
       created_at: job.createdAt,
       updated_at: job.updatedAt,
     };
