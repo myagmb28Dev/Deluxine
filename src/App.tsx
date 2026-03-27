@@ -14,6 +14,9 @@ import { AnimatePresence, motion } from 'framer-motion';
 type SessionOverrides = Record<string, { title?: string; hidden?: boolean }>;
 const SESSION_OVERRIDES_KEY = 'deluxine_session_overrides';
 
+type SessionRenderJobs = Record<string, string>;
+const SESSION_RENDER_JOBS_KEY = 'deluxine_session_render_jobs';
+
 const loadSessionOverrides = (): SessionOverrides => {
   try {
     const raw = localStorage.getItem(SESSION_OVERRIDES_KEY);
@@ -26,6 +29,38 @@ const loadSessionOverrides = (): SessionOverrides => {
 
 const saveSessionOverrides = (overrides: SessionOverrides) => {
   localStorage.setItem(SESSION_OVERRIDES_KEY, JSON.stringify(overrides));
+};
+
+const loadSessionRenderJobs = (): SessionRenderJobs => {
+  try {
+    const raw = localStorage.getItem(SESSION_RENDER_JOBS_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw) as SessionRenderJobs;
+  } catch {
+    return {};
+  }
+};
+
+const saveSessionRenderJobs = (jobs: SessionRenderJobs) => {
+  localStorage.setItem(SESSION_RENDER_JOBS_KEY, JSON.stringify(jobs));
+};
+
+const getLastRenderJobId = (sessionId: string) => {
+  const jobs = loadSessionRenderJobs();
+  return jobs[sessionId] ?? null;
+};
+
+const setLastRenderJobId = (sessionId: string, jobId: string) => {
+  const jobs = loadSessionRenderJobs();
+  jobs[sessionId] = jobId;
+  saveSessionRenderJobs(jobs);
+};
+
+const clearLastRenderJobId = (sessionId: string) => {
+  const jobs = loadSessionRenderJobs();
+  if (!(sessionId in jobs)) return;
+  delete jobs[sessionId];
+  saveSessionRenderJobs(jobs);
 };
 
 // Backend uses normalized coordinates (0.0 ~ 1.0)
@@ -296,6 +331,32 @@ const AppContent: React.FC = () => {
           setStatus('idle');
         }
       }
+
+      const lastRenderJobId = getLastRenderJobId(session.id);
+      if (lastRenderJobId) {
+        try {
+          const res = await renderApi.getJobStatus(session.id, lastRenderJobId);
+          if (res.status === 'completed') {
+            setFinalImage(resolveAssetUrl(res.output_image));
+            setProgress(100);
+            setStatus('completed');
+          } else if (res.status === 'quota_exceeded') {
+            setProgress(-1);
+            setRenderErrorMessage('렌더링 쿼터를 초과했습니다. 잠시 후 다시 시도해주세요.');
+            setStatus('failed');
+          } else if (res.status === 'failed') {
+            setProgress(-1);
+            setRenderErrorMessage('렌더링 중 오류가 발생했습니다. 다시 시도해주세요.');
+            setStatus('failed');
+          } else {
+            setStatus('rendering');
+            setProgress(res.progress || 0);
+            pollRenderStatus(session.id, lastRenderJobId);
+          }
+        } catch (err) {
+          console.warn('[App] Failed to restore render job status:', err);
+        }
+      }
     } catch (sessionError) {
       console.warn('Failed to restore session:', sessionError);
       resetWorkspace();
@@ -332,6 +393,8 @@ const AppContent: React.FC = () => {
       saveSessionOverrides(next);
       return next;
     });
+
+    clearLastRenderJobId(id);
 
     if (sessionId === id) {
       setSearchParams({});
@@ -502,6 +565,7 @@ const AppContent: React.FC = () => {
       // Step 2: 렌더링(이미지 생성) 요청
       console.log('[App] Requesting render with prompt:', prompt);
       const job = await renderApi.request(sessionId, prompt || "", poseProjectionImage || undefined);
+      setLastRenderJobId(sessionId, job.job_id);
       pollRenderStatus(sessionId, job.job_id);
     } catch (err) {
       console.error('[App] Unified action failed:', err);
