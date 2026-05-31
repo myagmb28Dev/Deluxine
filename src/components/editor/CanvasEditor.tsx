@@ -15,6 +15,45 @@ const POSE_PROJECTION_MAX_HEIGHT = 512;
 const POSE_PROJECTION_QUALITY = 0.76;
 const DISABLED_RAYCAST: THREE.Object3D['raycast'] = () => null;
 
+type OrbitControlRef = {
+  object: THREE.Camera;
+  target: THREE.Vector3;
+  update: () => void;
+} | null;
+
+type StoredCameraState = {
+  position: [number, number, number];
+  quaternion: [number, number, number, number];
+  zoom: number;
+  target: [number, number, number];
+};
+
+type StoredCameraStateMap = Record<string, StoredCameraState>;
+
+const CAMERA_STATE_KEY = 'deluxine_camera_state_v1';
+
+const loadCameraState = (sessionId: string): StoredCameraState | null => {
+  try {
+    const raw = localStorage.getItem(CAMERA_STATE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as StoredCameraStateMap;
+    return parsed[sessionId] ?? null;
+  } catch {
+    return null;
+  }
+};
+
+const saveCameraState = (sessionId: string, state: StoredCameraState) => {
+  try {
+    const raw = localStorage.getItem(CAMERA_STATE_KEY);
+    const parsed = (raw ? (JSON.parse(raw) as StoredCameraStateMap) : {}) as StoredCameraStateMap;
+    parsed[sessionId] = state;
+    localStorage.setItem(CAMERA_STATE_KEY, JSON.stringify(parsed));
+  } catch {
+    // ignore storage failures
+  }
+};
+
 type TransformMode = 'translate' | 'rotate' | 'scale';
 type TransformTarget = 'whole' | 'bone';
 
@@ -322,6 +361,67 @@ const CaptureBridge = ({
   return null;
 };
 
+const CameraPersistence = ({
+  sessionId,
+  enabled,
+  controlsRef,
+}: {
+  sessionId: string | null;
+  enabled: boolean;
+  controlsRef: React.MutableRefObject<OrbitControlRef>;
+}) => {
+  const { camera } = useThree();
+
+  useEffect(() => {
+    if (!enabled || !sessionId) return;
+    const saved = loadCameraState(sessionId);
+    if (!saved) return;
+
+    camera.position.fromArray(saved.position);
+    camera.quaternion.fromArray(saved.quaternion);
+    (camera as THREE.OrthographicCamera).zoom = saved.zoom;
+    (camera as THREE.OrthographicCamera).updateProjectionMatrix();
+
+    if (controlsRef.current) {
+      controlsRef.current.target.fromArray(saved.target);
+      controlsRef.current.update();
+    }
+  }, [camera, controlsRef, enabled, sessionId]);
+
+  const handleSave = useCallback(() => {
+    if (!enabled || !sessionId) return;
+
+    const controls = controlsRef.current;
+    const target = controls?.target ?? new THREE.Vector3(0, 0, 0);
+    const zoom = (camera as THREE.OrthographicCamera).zoom ?? 1;
+
+    saveCameraState(sessionId, {
+      position: [camera.position.x, camera.position.y, camera.position.z],
+      quaternion: [camera.quaternion.x, camera.quaternion.y, camera.quaternion.z, camera.quaternion.w],
+      zoom,
+      target: [target.x, target.y, target.z],
+    });
+  }, [camera, controlsRef, enabled, sessionId]);
+
+  return <OrbitControlsSaveBridge onSave={handleSave} />;
+};
+
+const OrbitControlsSaveBridge = ({ onSave }: { onSave: () => void }) => {
+  const { controls } = useThree();
+
+  useEffect(() => {
+    if (!controls) return;
+    const onEnd = () => onSave();
+    const orbit = controls as any;
+    orbit.addEventListener?.('end', onEnd);
+    return () => {
+      orbit.removeEventListener?.('end', onEnd);
+    };
+  }, [controls, onSave]);
+
+  return null;
+};
+
 const RiggedMannequin = ({
   keypoints,
   backgroundImage,
@@ -331,6 +431,7 @@ const RiggedMannequin = ({
   transformMode,
   transformTarget,
   selectedBoneId,
+  shiftBoneDragEnabled,
   onSelectBone,
   onSetDragging,
   onUpdateKeypoint,
@@ -346,6 +447,7 @@ const RiggedMannequin = ({
   transformMode: TransformMode;
   transformTarget: TransformTarget;
   selectedBoneId: string | null;
+  shiftBoneDragEnabled: boolean;
   onSelectBone: (boneId: string) => void;
   onSetDragging: (dragging: boolean) => void;
   onUpdateKeypoint: (index: number, newPos: THREE.Vector3, isFinal: boolean) => void;
@@ -354,9 +456,21 @@ const RiggedMannequin = ({
   onCanvasSelectWhole: () => void;
 }) => {
   const gltf = useGLTF(MODEL_URL);
+  const { camera } = useThree();
   const scene = useMemo(() => clone(gltf.scene) as THREE.Group, [gltf.scene]);
   const [pivotObject, setPivotObject] = useState<THREE.Object3D | null>(null);
   const [hoveredBoneId, setHoveredBoneId] = useState<string | null>(null);
+  const boneDragRef = useRef<{
+    active: boolean;
+    pointerId: number | null;
+    lastX: number;
+    lastY: number;
+  }>({
+    active: false,
+    pointerId: null,
+    lastX: 0,
+    lastY: 0,
+  });
   const appliedEditorStateSignatureRef = useRef<string | null>(null);
 
   const guideColors = useMemo(() => buildGuideColorMap(guide), [guide]);
@@ -474,6 +588,7 @@ const RiggedMannequin = ({
   const effectiveMode: TransformMode = transformTarget === 'bone' ? 'rotate' : transformMode;
   const selectedObject = transformTarget === 'whole' ? pivotObject : selectedBoneObject;
   const showBoneHandles = rigState.canEditBones && transformTarget === 'bone';
+  const isShiftBoneDragMode = shiftBoneDragEnabled && transformTarget === 'bone' && !!selectedBoneObject;
 
   const keypointIndexByName = useMemo(() => {
     const map = new Map<string, number>();
@@ -520,6 +635,42 @@ const RiggedMannequin = ({
     };
   }, [boneOptions, pivotObject, scene]);
 
+  const applyDragRotateToBone = useCallback((dx: number, dy: number) => {
+    if (!selectedBoneObject) return;
+    const yaw = -dx * 0.01;
+    const pitch = -dy * 0.01;
+    const worldUp = new THREE.Vector3(0, 1, 0);
+    const cameraDir = new THREE.Vector3();
+    const cameraRight = new THREE.Vector3();
+
+    camera.getWorldDirection(cameraDir);
+    cameraRight.crossVectors(cameraDir, camera.up).normalize();
+
+    selectedBoneObject.rotateOnWorldAxis(worldUp, yaw);
+    selectedBoneObject.rotateOnWorldAxis(cameraRight, pitch);
+
+    scene.updateMatrixWorld(true);
+    syncKeypointsFromBones(false);
+  }, [camera, scene, selectedBoneObject, syncKeypointsFromBones]);
+
+  const finishShiftBoneDrag = useCallback(() => {
+    if (!boneDragRef.current.active) return;
+    boneDragRef.current.active = false;
+    boneDragRef.current.pointerId = null;
+    onSetDragging(false);
+    const editorState = captureEditorState();
+    if (editorState) {
+      onEditorStateChange?.(editorState, true);
+    }
+    syncKeypointsFromBones(true);
+  }, [captureEditorState, onEditorStateChange, onSetDragging, syncKeypointsFromBones]);
+
+  useEffect(() => {
+    if (!isShiftBoneDragMode) {
+      finishShiftBoneDrag();
+    }
+  }, [finishShiftBoneDrag, isShiftBoneDragMode]);
+
   const initialEditorStateSignature = useMemo(
     () => (initialEditorState ? JSON.stringify(initialEditorState) : null),
     [initialEditorState],
@@ -561,7 +712,39 @@ const RiggedMannequin = ({
         ref={(object) => {
           setPivotObject(object);
         }}
+        onPointerDown={(event) => {
+          if (!isShiftBoneDragMode) return;
+          event.stopPropagation();
+          boneDragRef.current.active = true;
+          boneDragRef.current.pointerId = event.pointerId;
+          boneDragRef.current.lastX = event.clientX;
+          boneDragRef.current.lastY = event.clientY;
+          onSetDragging(true);
+        }}
+        onPointerMove={(event) => {
+          if (!isShiftBoneDragMode) return;
+          if (!boneDragRef.current.active) return;
+          if (boneDragRef.current.pointerId !== event.pointerId) return;
+
+          event.stopPropagation();
+          const dx = event.clientX - boneDragRef.current.lastX;
+          const dy = event.clientY - boneDragRef.current.lastY;
+          boneDragRef.current.lastX = event.clientX;
+          boneDragRef.current.lastY = event.clientY;
+
+          applyDragRotateToBone(dx, dy);
+        }}
+        onPointerUp={(event) => {
+          if (!boneDragRef.current.active) return;
+          if (boneDragRef.current.pointerId !== event.pointerId) return;
+          event.stopPropagation();
+          finishShiftBoneDrag();
+        }}
+        onPointerLeave={() => {
+          finishShiftBoneDrag();
+        }}
         onClick={(event) => {
+          if (isShiftBoneDragMode) return;
           event.stopPropagation();
           onCanvasSelectWhole();
         }}
@@ -592,7 +775,7 @@ const RiggedMannequin = ({
           />
         ))}
 
-      {selectedObject && !captureMode && (
+      {selectedObject && !captureMode && !isShiftBoneDragMode && (
         <TransformControls
           object={selectedObject}
           mode={effectiveMode}
@@ -617,6 +800,7 @@ const RiggedMannequin = ({
 };
 
 interface CanvasEditorProps {
+  sessionId?: string | null;
   keypoints: Keypoint[];
   backgroundImage?: string | null;
   topology?: PoseTopologyResponse | null;
@@ -627,6 +811,7 @@ interface CanvasEditorProps {
 }
 
 export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorProps>(({
+  sessionId = null,
   keypoints,
   backgroundImage,
   guide,
@@ -639,6 +824,7 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
   const [transformMode, setTransformMode] = useState<TransformMode>('translate');
   const [selectedBoneId, setSelectedBoneId] = useState<string | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(true);
+  const [isShiftPressed, setIsShiftPressed] = useState(false);
   const [captureMode, setCaptureMode] = useState(false);
   const [captureRequestId, setCaptureRequestId] = useState(0);
   const [rigState, setRigState] = useState<RigState>({
@@ -650,6 +836,7 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
   });
   const captureResolverRef = useRef<((imageData: string | null) => void) | null>(null);
   const activeTarget: TransformTarget = rigState.canEditBones ? transformTarget : 'whole';
+  const orbitControlsRef = useRef<OrbitControlRef>(null);
 
   const handleCaptureComplete = useCallback((imageData: string | null) => {
     setCaptureMode(false);
@@ -687,6 +874,9 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Shift') {
+        setIsShiftPressed(true);
+      }
       const target = event.target as HTMLElement | null;
       const tagName = target?.tagName?.toLowerCase();
       if (tagName === 'input' || tagName === 'textarea' || target?.isContentEditable) return;
@@ -732,8 +922,18 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
       }
     };
 
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.key === 'Shift') {
+        setIsShiftPressed(false);
+      }
+    };
+
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+    };
   }, [activeTarget, enterBoneMode, enterWholeMode]);
 
   const statusText = rigState.canEditBones
@@ -743,17 +943,29 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
     : rigState.message || 'Whole mannequin transform';
 
   return (
-    <div className="w-[600px] h-[800px] bg-[#0a0a0a] rounded-2xl overflow-hidden relative shadow-[0_0_50px_rgba(0,0,0,0.5)] border border-white/5">
+    <div className="w-[600px] h-[800px] bg-gradient-to-b from-[#09090e] to-[#040406] rounded-2xl overflow-hidden relative shadow-[0_15px_40px_rgba(0,0,0,0.6)] border border-white/5">
+      {/* Cybernetic Corner Brackets */}
+      <div className="absolute top-3 left-3 w-3 h-3 border-t-2 border-l-2 border-indigo-500/30 pointer-events-none" />
+      <div className="absolute top-3 right-3 w-3 h-3 border-t-2 border-r-2 border-indigo-500/30 pointer-events-none" />
+      <div className="absolute bottom-3 left-3 w-3 h-3 border-b-2 border-l-2 border-indigo-500/30 pointer-events-none" />
+      <div className="absolute bottom-3 right-3 w-3 h-3 border-b-2 border-r-2 border-indigo-500/30 pointer-events-none" />
+
       <button
         onClick={() => setShowShortcuts((current) => !current)}
-        className="absolute right-4 top-4 z-20 rounded-xl border border-zinc-700 bg-black/60 px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-zinc-200"
+        className="absolute right-4 top-4 z-20 rounded-lg border border-white/5 bg-zinc-950/60 hover:bg-zinc-900/60 hover:border-white/10 px-3 py-1.5 text-[9px] font-bold uppercase tracking-wider text-zinc-300 transition-all backdrop-blur-md cursor-pointer active:scale-95"
       >
         Shortcuts
       </button>
 
       {rigState.canEditBones && activeTarget === 'bone' && (
-        <div className="absolute left-4 top-16 z-20 rounded-2xl border border-sky-300/20 bg-sky-100/10 px-4 py-3 text-xs text-sky-50 backdrop-blur-sm">
-          Bone mode is active. The current joint stays highlighted while you rotate it.
+        <div className="absolute left-4 top-14 z-20 rounded-xl border border-indigo-500/20 bg-indigo-500/10 px-4 py-2.5 text-[11px] font-medium text-indigo-200 backdrop-blur-md shadow-[0_4px_20px_rgba(99,102,241,0.06)] animate-pulse">
+          Bone mode is active. Selected joint is highlighted.
+        </div>
+      )}
+
+      {!captureMode && (
+        <div className="absolute left-4 top-4 z-20 rounded-lg border border-white/5 bg-zinc-950/60 px-3 py-1.5 text-[9px] font-bold uppercase tracking-wider text-zinc-400 backdrop-blur-md select-none">
+          View: right-drag rotate · wheel zoom
         </div>
       )}
 
@@ -779,6 +991,7 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
             transformMode={transformMode}
             transformTarget={activeTarget}
             selectedBoneId={selectedBoneId}
+            shiftBoneDragEnabled={isShiftPressed}
             onSelectBone={(boneId) => {
               setSelectedBoneId(boneId);
             }}
@@ -799,33 +1012,69 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
             enabled={captureMode}
             onCaptured={handleCaptureComplete}
           />
+          <CameraPersistence
+            sessionId={sessionId}
+            enabled={!captureMode}
+            controlsRef={orbitControlsRef}
+          />
         </Suspense>
-        <OrbitControls makeDefault enabled={!dragging} enableRotate={false} />
+        <OrbitControls
+          ref={(instance) => {
+            orbitControlsRef.current = instance as unknown as OrbitControlRef;
+          }}
+          makeDefault
+          enabled={!dragging && !captureMode}
+          enableRotate
+          enableZoom
+          enablePan={false}
+          mouseButtons={{
+            LEFT: THREE.MOUSE.PAN,
+            MIDDLE: THREE.MOUSE.DOLLY,
+            RIGHT: THREE.MOUSE.ROTATE,
+          }}
+        />
       </Canvas>
 
       {showShortcuts && (
-        <div className="absolute right-4 top-16 z-20 w-[220px] rounded-2xl border border-white/10 bg-black/70 p-4 text-[11px] text-zinc-200 backdrop-blur-sm">
-          <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.24em] text-zinc-400">Shortcuts</div>
-          <div className="grid grid-cols-[28px_1fr] gap-y-1">
-            <span className="font-mono text-zinc-100">W</span><span>Move whole mannequin</span>
-            <span className="font-mono text-zinc-100">E</span><span>Rotate whole mannequin</span>
-            <span className="font-mono text-zinc-100">R</span><span>Scale whole mannequin</span>
-            <span className="font-mono text-zinc-100">1</span><span>Bone mode</span>
-            <span className="font-mono text-zinc-100">2</span><span>Whole mannequin mode</span>
-            <span className="font-mono text-zinc-100">Esc</span><span>Clear current selection only</span>
-            <span className="font-mono text-zinc-100">H</span><span>Toggle this guide</span>
+        <div className="absolute right-4 top-14 z-20 w-[240px] rounded-xl border border-white/5 bg-[#09090e]/90 p-4 text-[10px] text-zinc-300 backdrop-blur-xl shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+          <div className="mb-3 text-[9px] font-bold uppercase tracking-[0.2em] text-indigo-400">Controls</div>
+          <div className="grid grid-cols-[45px_1fr] gap-x-2 gap-y-2 items-center">
+            <span className="font-mono font-bold text-center text-white bg-white/5 border border-white/5 py-0.5 px-1.5 rounded-md">W</span>
+            <span className="text-zinc-400">Move mannequin</span>
+            
+            <span className="font-mono font-bold text-center text-white bg-white/5 border border-white/5 py-0.5 px-1.5 rounded-md">E</span>
+            <span className="text-zinc-400">Rotate mannequin</span>
+            
+            <span className="font-mono font-bold text-center text-white bg-white/5 border border-white/5 py-0.5 px-1.5 rounded-md">R</span>
+            <span className="text-zinc-400">Scale mannequin</span>
+            
+            <span className="font-mono font-bold text-center text-white bg-white/5 border border-white/5 py-0.5 px-1.5 rounded-md">1</span>
+            <span className="text-zinc-400">Bone rotation mode</span>
+            
+            <span className="font-mono font-bold text-center text-white bg-white/5 border border-white/5 py-0.5 px-1.5 rounded-md">2</span>
+            <span className="text-zinc-400">Whole mannequin mode</span>
+            
+            <span className="font-mono font-bold text-center text-white bg-white/5 border border-white/5 py-0.5 px-1 rounded-md text-[9px]">Shift</span>
+            <span className="text-zinc-400">Bone twist (Hold & Drag)</span>
+            
+            <span className="font-mono font-bold text-center text-white bg-white/5 border border-white/5 py-0.5 px-1 rounded-md text-[9px]">Esc</span>
+            <span className="text-zinc-400">Clear joint selection</span>
+            
+            <span className="font-mono font-bold text-center text-white bg-white/5 border border-white/5 py-0.5 px-1.5 rounded-md">H</span>
+            <span className="text-zinc-400">Toggle shortcuts guide</span>
           </div>
         </div>
       )}
 
       {rigState.message && (
-        <div className="absolute inset-x-4 bottom-14 z-20 rounded-2xl border border-amber-300/20 bg-amber-100/10 px-4 py-3 text-sm text-amber-50 backdrop-blur-sm">
+        <div className="absolute inset-x-4 bottom-14 z-20 rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-2.5 text-xs text-amber-200 backdrop-blur-md shadow-lg">
           {rigState.message}
         </div>
       )}
 
       <div className="absolute bottom-4 left-4 pointer-events-none">
-        <div className="text-[10px] text-white/35 font-mono uppercase tracking-widest">
+        <div className="text-[9px] text-zinc-500 font-mono uppercase tracking-[0.2em] flex items-center gap-1.5">
+          <span className="h-1 w-1 rounded-full bg-indigo-500/80 animate-ping" />
           {statusText}
         </div>
       </div>

@@ -631,6 +631,7 @@ const AppContent: React.FC = () => {
             <CanvasEditor 
               ref={canvasEditorRef}
               key={sessionId || 'idle'}
+              sessionId={sessionId}
               keypoints={keypoints}
               backgroundImage={lineArtImage}
               topology={poseTopology}

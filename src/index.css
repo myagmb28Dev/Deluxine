@@ -1,13 +1,19 @@
-﻿@config "../tailwind.config.js";
 @import "tailwindcss";
 
+@theme {
+  --color-background: #0a0a0a;
+  --color-foreground: #ffffff;
+  --color-accent: #333333;
+  --color-muted: #1f1f1f;
+}
+
 :root {
-  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  font-family: 'Outfit', 'Inter', system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.5;
   font-weight: 400;
   color-scheme: dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #0a0a0a;
+  color: rgba(255, 255, 255, 0.95);
+  background-color: #040406;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -20,28 +26,106 @@ body {
   place-items: center;
   min-width: 320px;
   min-height: 100vh;
-  background: #0a0a0a;
+  background-color: #040406;
+  background: radial-gradient(circle at 50% 50%, #0d0d15 0%, #040406 100%);
   color: #ffffff;
+  overflow: hidden;
 }
 
 #root {
   width: 100%;
 }
 
-.glass {
-  background: rgba(255, 255, 255, 0.05);
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+/* Glassmorphism Styles */
+.glass-panel {
+  background: rgba(8, 8, 12, 0.5);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
+.glass-panel-light {
+  background: rgba(255, 255, 255, 0.02);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+/* Neon Glow Accents */
+.neon-glow-indigo {
+  box-shadow: 0 0 30px rgba(99, 102, 241, 0.15);
+}
+
+.neon-glow-purple {
+  box-shadow: 0 0 30px rgba(168, 85, 247, 0.15);
+}
+
+.neon-border-glow {
+  box-shadow: inset 0 0 12px rgba(99, 102, 241, 0.05), 0 0 20px rgba(99, 102, 241, 0.1);
+}
+
+/* Metallic & Gradient text */
+.text-gradient-metallic {
+  background: linear-gradient(135deg, #ffffff 0%, #e2e8f0 50%, #94a3b8 100%);
+  -webkit-bg-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.text-gradient-purple {
+  background: linear-gradient(135deg, #a855f7 0%, #6366f1 100%);
+  -webkit-bg-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Button & Input Improvements */
 .button-primary {
-  @apply bg-white text-black font-semibold px-4 py-2 rounded-md transition-all hover:bg-gray-200 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed;
+  @apply bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-semibold px-6 py-2.5 rounded-xl transition-all duration-300 hover:from-indigo-400 hover:to-purple-500 hover:shadow-[0_0_20px_rgba(99,102,241,0.4)] active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed;
 }
 
 .button-secondary {
-  @apply bg-accent text-white font-semibold px-4 py-2 rounded-md transition-all hover:bg-muted active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed;
+  @apply bg-zinc-900/80 text-zinc-300 font-semibold px-6 py-2.5 rounded-xl border border-zinc-800 transition-all duration-300 hover:bg-zinc-800 hover:text-white active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed;
 }
 
 .input-dark {
-  @apply bg-muted border border-accent text-white px-4 py-2 rounded-md focus:outline-none focus:ring-2 focus:ring-gray-600 transition-all;
+  @apply bg-zinc-950/40 border border-zinc-800 text-white px-4 py-2.5 rounded-xl focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/30 transition-all duration-300;
 }
+
+/* Mesh Glow Animation */
+@keyframes aurora {
+  0% { transform: translate(0px, 0px) scale(1); }
+  33% { transform: translate(30px, -50px) scale(1.1); }
+  66% { transform: translate(-20px, 20px) scale(0.95); }
+  100% { transform: translate(0px, 0px) scale(1); }
+}
+
+.animate-aurora-1 {
+  animation: aurora 20s infinite alternate ease-in-out;
+}
+
+.animate-aurora-2 {
+  animation: aurora 25s infinite alternate-reverse ease-in-out;
+}
+
+.animate-aurora-3 {
+  animation: aurora 18s infinite alternate ease-in-out 2s;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 99px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
