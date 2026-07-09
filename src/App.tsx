@@ -14,8 +14,16 @@ import { AnimatePresence, motion } from 'framer-motion';
 type SessionOverrides = Record<string, { title?: string; hidden?: boolean }>;
 const SESSION_OVERRIDES_KEY = 'deluxine_session_overrides';
 
-type SessionRenderJobs = Record<string, string>;
+type SessionRenderJob = {
+  jobId: string;
+  startedAt: number;
+};
+
+type SessionRenderJobs = Record<string, SessionRenderJob | string>;
 const SESSION_RENDER_JOBS_KEY = 'deluxine_session_render_jobs';
+const RENDER_JOB_STALE_MS = 20 * 60 * 1000;
+const RENDER_POLL_INTERVAL_MS = 3000;
+const RENDER_POLL_TIMEOUT_MS = 10 * 60 * 1000;
 
 const loadSessionOverrides = (): SessionOverrides => {
   try {
@@ -45,14 +53,36 @@ const saveSessionRenderJobs = (jobs: SessionRenderJobs) => {
   localStorage.setItem(SESSION_RENDER_JOBS_KEY, JSON.stringify(jobs));
 };
 
-const getLastRenderJobId = (sessionId: string) => {
-  const jobs = loadSessionRenderJobs();
-  return jobs[sessionId] ?? null;
+const normalizeStoredRenderJob = (job: SessionRenderJob | string | undefined): SessionRenderJob | null => {
+  if (!job) return null;
+  if (typeof job === 'string') {
+    return { jobId: job, startedAt: 0 };
+  }
+  if (!job.jobId) return null;
+  return {
+    jobId: job.jobId,
+    startedAt: Number.isFinite(job.startedAt) ? job.startedAt : 0,
+  };
 };
 
-const setLastRenderJobId = (sessionId: string, jobId: string) => {
+const getLastRenderJob = (sessionId: string) => {
   const jobs = loadSessionRenderJobs();
-  jobs[sessionId] = jobId;
+  const job = normalizeStoredRenderJob(jobs[sessionId]);
+
+  if (!job) return { job: null, wasStale: false };
+
+  if (!job.startedAt || Date.now() - job.startedAt > RENDER_JOB_STALE_MS) {
+    delete jobs[sessionId];
+    saveSessionRenderJobs(jobs);
+    return { job: null, wasStale: true };
+  }
+
+  return { job, wasStale: false };
+};
+
+const setLastRenderJob = (sessionId: string, jobId: string) => {
+  const jobs = loadSessionRenderJobs();
+  jobs[sessionId] = { jobId, startedAt: Date.now() };
   saveSessionRenderJobs(jobs);
 };
 
@@ -83,6 +113,34 @@ const resolveAssetUrl = (url: string | null) => {
   if (!url) return null;
   if (url.startsWith('http://') || url.startsWith('https://')) return url;
   return url;
+};
+
+const getErrorMessage = (error: unknown, fallback: string) => {
+  const maybeAxiosError = error as {
+    message?: string;
+    response?: {
+      data?: unknown;
+    };
+  };
+  const data = maybeAxiosError.response?.data;
+
+  if (data && typeof data === 'object') {
+    const body = data as { message?: string; error?: string; detail?: string };
+    const responseMessage = body.message || body.error || body.detail;
+    if (responseMessage) return responseMessage;
+  }
+
+  if (typeof data === 'string' && data.trim()) return data;
+  if (maybeAxiosError.message) return maybeAxiosError.message;
+  return fallback;
+};
+
+const getRenderFailureMessage = (response: unknown, fallback: string) => {
+  if (response && typeof response === 'object') {
+    const body = response as { message?: string; error?: string; detail?: string };
+    return body.message || body.error || body.detail || fallback;
+  }
+  return fallback;
 };
 
 const toKstDisplayTimestamp = (isoLike: string) => {
@@ -122,6 +180,8 @@ const AppContent: React.FC = () => {
   const [sessionOverrides, setSessionOverrides] = useState<SessionOverrides>(() => loadSessionOverrides());
   const eventSourceRef = useRef<EventSource | null>(null);
   const statusPollRef = useRef<number | null>(null);
+  const renderPollRef = useRef<number | null>(null);
+  const activeRenderJobRef = useRef<{ sessionId: string; jobId: string; startedAt: number } | null>(null);
   const canvasEditorRef = useRef<CanvasEditorHandle | null>(null);
   const saveInFlightRef = useRef(false);
   const pendingPoseRef = useRef<Keypoint[] | null>(null);
@@ -205,6 +265,11 @@ const AppContent: React.FC = () => {
       window.clearInterval(statusPollRef.current);
       statusPollRef.current = null;
     }
+    if (renderPollRef.current) {
+      window.clearInterval(renderPollRef.current);
+      renderPollRef.current = null;
+    }
+    activeRenderJobRef.current = null;
     setSessionId(null);
     setStatus('idle');
     setPrompt('');
@@ -277,6 +342,82 @@ const AppContent: React.FC = () => {
     }, 1500);
   }, [applyLoadedPose, stopStatusPolling]);
 
+  const stopRenderPolling = React.useCallback(() => {
+    if (renderPollRef.current) {
+      window.clearInterval(renderPollRef.current);
+      renderPollRef.current = null;
+    }
+    activeRenderJobRef.current = null;
+  }, []);
+
+  const pollRenderStatus = React.useCallback((sid: string, jid: string, startedAt = Date.now()) => {
+    stopRenderPolling();
+    activeRenderJobRef.current = { sessionId: sid, jobId: jid, startedAt };
+
+    const pollOnce = async () => {
+      const activeJob = activeRenderJobRef.current;
+      if (!activeJob || activeJob.sessionId !== sid || activeJob.jobId !== jid) return;
+
+      if (Date.now() - activeJob.startedAt > RENDER_POLL_TIMEOUT_MS) {
+        console.error('[App] Render job timed out:', { sessionId: sid, jobId: jid });
+        clearLastRenderJobId(sid);
+        setProgress(-1);
+        setRenderErrorMessage(`렌더링 결과가 제한 시간 안에 도착하지 않았습니다. 서버에서 job_id를 확인해 주세요: ${jid}`);
+        setStatus('failed');
+        stopRenderPolling();
+        return;
+      }
+
+      try {
+        const res = await renderApi.getJobStatus(sid, jid);
+        const stillActive = activeRenderJobRef.current;
+        if (!stillActive || stillActive.sessionId !== sid || stillActive.jobId !== jid) return;
+
+        console.info('[App] Render job status:', {
+          sessionId: sid,
+          jobId: jid,
+          status: res.status,
+          progress: res.progress,
+        });
+
+        if (res.status === 'completed') {
+          setFinalImage(resolveAssetUrl(res.output_image));
+          setProgress(100);
+          setStatus('completed');
+          stopRenderPolling();
+        } else if (res.status === 'quota_exceeded') {
+          setProgress(-1);
+          clearLastRenderJobId(sid);
+          console.warn('[App] Render quota exceeded:', res);
+          setRenderErrorMessage(getRenderFailureMessage(res, '렌더링 quota를 초과했습니다. 잠시 후 다시 시도해 주세요.'));
+          setStatus('failed');
+          stopRenderPolling();
+        } else if (res.status === 'failed') {
+          setProgress(-1);
+          clearLastRenderJobId(sid);
+          console.warn('[App] Render job failed:', res);
+          setRenderErrorMessage(getRenderFailureMessage(res, '렌더링 중 오류가 발생했습니다. 다시 시도해 주세요.'));
+          setStatus('failed');
+          stopRenderPolling();
+        } else {
+          setStatus('rendering');
+          setProgress(res.progress || 0);
+        }
+      } catch (err) {
+        console.error('[App] Failed to poll render job status:', err);
+        clearLastRenderJobId(sid);
+        setRenderErrorMessage(getErrorMessage(err, '렌더링 상태를 확인하지 못했습니다. 네트워크 또는 서버 상태를 확인해 주세요.'));
+        setStatus('failed');
+        stopRenderPolling();
+      }
+    };
+
+    void pollOnce();
+    renderPollRef.current = window.setInterval(() => {
+      void pollOnce();
+    }, RENDER_POLL_INTERVAL_MS);
+  }, [stopRenderPolling]);
+
   const restoreSession = React.useCallback(async (targetSessionId: string) => {
     if (!isLoggedIn) return;
 
@@ -332,36 +473,55 @@ const AppContent: React.FC = () => {
         }
       }
 
-      const lastRenderJobId = getLastRenderJobId(session.id);
-      if (lastRenderJobId) {
+      const { job: lastRenderJob, wasStale } = getLastRenderJob(session.id);
+      if (wasStale) {
+        console.warn('[App] Cleared stale render job while restoring session:', { sessionId: session.id });
+        setRenderErrorMessage('이전에 시작된 렌더링 작업이 너무 오래 응답하지 않아 초기화했습니다. 다시 요청해 주세요.');
+        setStatus('failed');
+      }
+
+      if (lastRenderJob) {
         try {
-          const res = await renderApi.getJobStatus(session.id, lastRenderJobId);
+          const res = await renderApi.getJobStatus(session.id, lastRenderJob.jobId);
+          console.info('[App] Restored render job status:', {
+            sessionId: session.id,
+            jobId: lastRenderJob.jobId,
+            status: res.status,
+            progress: res.progress,
+          });
           if (res.status === 'completed') {
             setFinalImage(resolveAssetUrl(res.output_image));
             setProgress(100);
             setStatus('completed');
           } else if (res.status === 'quota_exceeded') {
             setProgress(-1);
-            setRenderErrorMessage('렌더링 쿼터를 초과했습니다. 잠시 후 다시 시도해주세요.');
+            clearLastRenderJobId(session.id);
+            console.warn('[App] Render quota exceeded while restoring job:', res);
+            setRenderErrorMessage(getRenderFailureMessage(res, '렌더링 쿼터를 초과했습니다. 잠시 후 다시 시도해 주세요.'));
             setStatus('failed');
           } else if (res.status === 'failed') {
             setProgress(-1);
-            setRenderErrorMessage('렌더링 중 오류가 발생했습니다. 다시 시도해주세요.');
+            clearLastRenderJobId(session.id);
+            console.warn('[App] Render job failed while restoring:', res);
+            setRenderErrorMessage(getRenderFailureMessage(res, '렌더링 중 오류가 발생했습니다. 다시 시도해 주세요.'));
             setStatus('failed');
           } else {
             setStatus('rendering');
             setProgress(res.progress || 0);
-            pollRenderStatus(session.id, lastRenderJobId);
+            pollRenderStatus(session.id, lastRenderJob.jobId, lastRenderJob.startedAt);
           }
         } catch (err) {
           console.warn('[App] Failed to restore render job status:', err);
+          clearLastRenderJobId(session.id);
+          setRenderErrorMessage(getErrorMessage(err, '이전 렌더링 작업 상태를 복구하지 못했습니다. 다시 요청해 주세요.'));
+          setStatus('failed');
         }
       }
     } catch (sessionError) {
       console.warn('Failed to restore session:', sessionError);
       resetWorkspace();
     }
-  }, [applyLoadedPose, isLoggedIn, resetWorkspace, startStatusPolling]);
+  }, [applyLoadedPose, isLoggedIn, pollRenderStatus, resetWorkspace, startStatusPolling]);
 
   // Load session list when logged in
   React.useEffect(() => {
@@ -518,6 +678,8 @@ const AppContent: React.FC = () => {
         if (data.status === 'failed') {
           eventSource.close();
           eventSourceRef.current = null;
+          console.warn('[SSE] Pose analysis failed:', data);
+          setRenderErrorMessage(getRenderFailureMessage(data, '포즈 분석에 실패했습니다. 이미지를 확인한 뒤 다시 시도해 주세요.'));
           setStatus('failed');
           stopStatusPolling();
         }
@@ -544,11 +706,22 @@ const AppContent: React.FC = () => {
         window.clearInterval(statusPollRef.current);
         statusPollRef.current = null;
       }
+      if (renderPollRef.current) {
+        window.clearInterval(renderPollRef.current);
+        renderPollRef.current = null;
+      }
+      activeRenderJobRef.current = null;
     };
   }, []);
 
   const handleRender = async () => {
     if (!sessionId || !isLoggedIn) return;
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+    stopStatusPolling();
+    stopRenderPolling();
     
     // UI 상태를 즉시 'rendering'으로 전환하여 버튼 비활성화 및 로딩 표시
     setProgress(0);
@@ -561,50 +734,29 @@ const AppContent: React.FC = () => {
       await poseApi.update(sessionId, toApiKeypoints(keypoints), latestEditorStateRef.current ?? undefined);
 
       const poseProjectionImage = await canvasEditorRef.current?.capturePoseProjection();
+      if (!poseProjectionImage) {
+        console.warn('[App] Pose projection capture was unavailable; requesting render without projection image.');
+      }
       
       // Step 2: 렌더링(이미지 생성) 요청
       console.log('[App] Requesting render with prompt:', prompt);
       const job = await renderApi.request(sessionId, prompt || "", poseProjectionImage || undefined);
-      setLastRenderJobId(sessionId, job.job_id);
+      console.info('[App] Render job created:', { sessionId, jobId: job.job_id, status: job.status });
+      setLastRenderJob(sessionId, job.job_id);
       pollRenderStatus(sessionId, job.job_id);
     } catch (err) {
       console.error('[App] Unified action failed:', err);
-      setStatus('editing'); 
+      clearLastRenderJobId(sessionId);
+      setRenderErrorMessage(getErrorMessage(err, '렌더 요청에 실패했습니다. 다시 시도해 주세요.'));
+      setStatus('failed');
     }
   };
 
-  const pollRenderStatus = (sid: string, jid: string) => {
-    const interval = setInterval(async () => {
-      try {
-        const res = await renderApi.getJobStatus(sid, jid);
-        if (res.status === 'completed') {
-          setFinalImage(resolveAssetUrl(res.output_image));
-          setProgress(100);
-          setStatus('completed');
-          clearInterval(interval);
-        } else if (res.status === 'quota_exceeded') {
-          setProgress(-1);
-          setRenderErrorMessage('렌더링 쿼터를 초과했습니다. 잠시 후 다시 시도해주세요.');
-          setStatus('failed');
-          clearInterval(interval);
-        } else if (res.status === 'failed') {
-          setProgress(-1);
-          setRenderErrorMessage('렌더링 중 오류가 발생했습니다. 다시 시도해주세요.');
-          setStatus('failed');
-          clearInterval(interval);
-        } else {
-          // pending or in_progress status
-          setProgress(res.progress || 0);
-        }
-      } catch (err) {
-        setStatus('failed');
-        clearInterval(interval);
-      }
-    }, 3000);
-  };
 
   if (isAuthLoading) return <div className="h-screen w-full bg-black flex items-center justify-center text-zinc-500 font-mono tracking-widest uppercase">Initializing...</div>;
   if (!isLoggedIn) return <LoginView onLogin={login} />;
+
+  const shouldShowPromptBar = Boolean(sessionId) && status !== 'idle';
 
   return (
     <div className="flex h-screen w-full bg-black text-white overflow-hidden font-sans selection:bg-white/10">
@@ -652,12 +804,12 @@ const AppContent: React.FC = () => {
           </motion.div>
         </div>
         
-        {(status === 'editing' || status === 'rendering' || status === 'completed') && (
+        {shouldShowPromptBar && (
           <PromptBar 
             prompt={prompt}
             onPromptChange={setPrompt}
             onRender={handleRender}
-            isLoading={status === 'rendering'}
+            isLoading={status === 'rendering' || status === 'analyzing'}
             errorMessage={renderErrorMessage}
           />
         )}

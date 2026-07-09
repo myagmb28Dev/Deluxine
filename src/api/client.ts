@@ -30,6 +30,7 @@ const resolveApiBaseUrl = () => {
 const api = axios.create({
   baseURL: resolveApiBaseUrl(),
   headers: { 'Content-Type': 'application/json' },
+  timeout: 60000,
 });
 
 // 요청 인터셉터: Firebase ID 토큰을 실시간으로 가져와서 헤더에 삽입

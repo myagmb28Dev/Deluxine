@@ -1,9 +1,24 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
 
+const firebaseDefaultAuthDomain = "deluxine-97b90.firebaseapp.com";
+const productionAuthDomain = "deluxineweb.vercel.app";
+
+const resolveAuthDomain = () => {
+  if (typeof window === 'undefined') {
+    return firebaseDefaultAuthDomain;
+  }
+
+  if (window.location.hostname === productionAuthDomain) {
+    return productionAuthDomain;
+  }
+
+  return firebaseDefaultAuthDomain;
+};
+
 const firebaseConfig = {
   apiKey: "AIzaSyCDSZxmPwEGqZQbw3IhoRHWaZ_D9BV8aw8",
-  authDomain: "deluxineweb.vercel.app",
+  authDomain: resolveAuthDomain(),
   projectId: "deluxine-97b90",
   storageBucket: "deluxine-97b90.firebasestorage.app",
   messagingSenderId: "988227485534",

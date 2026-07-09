@@ -1,5 +1,5 @@
 ﻿import { useState, useEffect } from 'react';
-import { getRedirectResult, onAuthStateChanged, signInWithPopup, signInWithRedirect, signOut } from 'firebase/auth';
+import { getRedirectResult, onAuthStateChanged, signInWithRedirect, signOut } from 'firebase/auth';
 import type { User } from 'firebase/auth';
 import { auth, googleProvider } from '../lib/firebase';
 import { authApi } from '../api/client';
@@ -42,12 +42,8 @@ export const useAuth = () => {
   const login = async () => {
     try {
       setIsLoading(true);
-      await signInWithPopup(auth, googleProvider);
+      await signInWithRedirect(auth, googleProvider);
     } catch (error) {
-      if (isPopupBlockedError(error)) {
-        await signInWithRedirect(auth, googleProvider);
-        return;
-      }
       console.error('Login failed:', error);
       setIsLoading(false);
     }
@@ -76,11 +72,4 @@ export const useAuth = () => {
     login,
     logout
   };
-};
-
-const isPopupBlockedError = (error: unknown) => {
-  return typeof error === 'object'
-    && error !== null
-    && 'code' in error
-    && (error as { code?: string }).code === 'auth/popup-blocked';
 };

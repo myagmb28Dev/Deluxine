@@ -13,6 +13,7 @@ const JOINT_HANDLE_RADIUS = 0.055;
 const POSE_PROJECTION_MAX_WIDTH = 384;
 const POSE_PROJECTION_MAX_HEIGHT = 512;
 const POSE_PROJECTION_QUALITY = 0.76;
+const POSE_PROJECTION_CAPTURE_TIMEOUT_MS = 5000;
 const DISABLED_RAYCAST: THREE.Object3D['raycast'] = () => null;
 
 type OrbitControlRef = {
@@ -835,10 +836,15 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
     message: null,
   });
   const captureResolverRef = useRef<((imageData: string | null) => void) | null>(null);
+  const captureTimeoutRef = useRef<number | null>(null);
   const activeTarget: TransformTarget = rigState.canEditBones ? transformTarget : 'whole';
   const orbitControlsRef = useRef<OrbitControlRef>(null);
 
   const handleCaptureComplete = useCallback((imageData: string | null) => {
+    if (captureTimeoutRef.current) {
+      window.clearTimeout(captureTimeoutRef.current);
+      captureTimeoutRef.current = null;
+    }
     setCaptureMode(false);
     const resolve = captureResolverRef.current;
     captureResolverRef.current = null;
@@ -847,11 +853,31 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
 
   useImperativeHandle(ref, () => ({
     capturePoseProjection: () => new Promise((resolve) => {
+      if (captureTimeoutRef.current) {
+        window.clearTimeout(captureTimeoutRef.current);
+        captureTimeoutRef.current = null;
+      }
+      captureResolverRef.current?.(null);
       captureResolverRef.current = resolve;
       setCaptureMode(true);
       setCaptureRequestId((current) => current + 1);
+      captureTimeoutRef.current = window.setTimeout(() => {
+        console.warn('[CanvasEditor] Pose projection capture timed out.');
+        handleCaptureComplete(null);
+      }, POSE_PROJECTION_CAPTURE_TIMEOUT_MS);
     }),
-  }), []);
+  }), [handleCaptureComplete]);
+
+  useEffect(() => {
+    return () => {
+      if (captureTimeoutRef.current) {
+        window.clearTimeout(captureTimeoutRef.current);
+        captureTimeoutRef.current = null;
+      }
+      captureResolverRef.current?.(null);
+      captureResolverRef.current = null;
+    };
+  }, []);
 
   const enterBoneMode = useCallback(() => {
     if (!rigState.canEditBones) return;
