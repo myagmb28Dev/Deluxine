@@ -1,5 +1,5 @@
 ﻿import { useState, useEffect } from 'react';
-import { onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
+import { getRedirectResult, onAuthStateChanged, signInWithPopup, signInWithRedirect, signOut } from 'firebase/auth';
 import type { User } from 'firebase/auth';
 import { auth, googleProvider } from '../lib/firebase';
 import { authApi } from '../api/client';
@@ -11,6 +11,10 @@ export const useAuth = () => {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
+    void getRedirectResult(auth).catch((error) => {
+      console.error('Redirect login failed:', error);
+    });
+
     // Firebase의 상태 감시자 설정
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
@@ -40,8 +44,11 @@ export const useAuth = () => {
       setIsLoading(true);
       await signInWithPopup(auth, googleProvider);
     } catch (error) {
+      if (isPopupBlockedError(error)) {
+        await signInWithRedirect(auth, googleProvider);
+        return;
+      }
       console.error('Login failed:', error);
-    } finally {
       setIsLoading(false);
     }
   };
@@ -69,4 +76,11 @@ export const useAuth = () => {
     login,
     logout
   };
+};
+
+const isPopupBlockedError = (error: unknown) => {
+  return typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && (error as { code?: string }).code === 'auth/popup-blocked';
 };

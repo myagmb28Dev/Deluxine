@@ -3,7 +3,7 @@ import { getAuth, GoogleAuthProvider } from 'firebase/auth';
 
 const firebaseConfig = {
   apiKey: "AIzaSyCDSZxmPwEGqZQbw3IhoRHWaZ_D9BV8aw8",
-  authDomain: "deluxine-97b90.firebaseapp.com",
+  authDomain: "deluxineweb.vercel.app",
   projectId: "deluxine-97b90",
   storageBucket: "deluxine-97b90.firebasestorage.app",
   messagingSenderId: "988227485534",
