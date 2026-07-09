@@ -1,5 +1,5 @@
 ﻿import { useState, useEffect } from 'react';
-import { getRedirectResult, onAuthStateChanged, signInWithRedirect, signOut } from 'firebase/auth';
+import { onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
 import type { User } from 'firebase/auth';
 import { auth, googleProvider } from '../lib/firebase';
 import { authApi } from '../api/client';
@@ -11,10 +11,6 @@ export const useAuth = () => {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    void getRedirectResult(auth).catch((error) => {
-      console.error('Redirect login failed:', error);
-    });
-
     // Firebase의 상태 감시자 설정
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
@@ -42,9 +38,10 @@ export const useAuth = () => {
   const login = async () => {
     try {
       setIsLoading(true);
-      await signInWithRedirect(auth, googleProvider);
+      await signInWithPopup(auth, googleProvider);
     } catch (error) {
       console.error('Login failed:', error);
+    } finally {
       setIsLoading(false);
     }
   };
