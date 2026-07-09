@@ -1,6 +1,6 @@
 import React, { Suspense, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { OrbitControls, Sphere, TransformControls, useGLTF, useTexture } from '@react-three/drei';
+import { OrbitControls, Sphere, TransformControls, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import { clone } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import type { Keypoint } from '../../types';
@@ -183,16 +183,6 @@ const EDITABLE_BONE_DEFINITIONS: EditableBoneDefinition[] = [
   { id: 'left_heel', candidates: ['heel.02.L'], tokenSets: [['heel02l']] },
   { id: 'right_heel', candidates: ['heel.02.R'], tokenSets: [['heel02r']] },
 ];
-
-const BackgroundImage = ({ url }: { url: string }) => {
-  const texture = useTexture(url);
-  return (
-    <mesh position={[0, 0, -1.6]}>
-      <planeGeometry args={[6, 8]} />
-      <meshBasicMaterial map={texture} opacity={BACKGROUND_OPACITY} transparent />
-    </mesh>
-  );
-};
 
 const normalizeName = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
 
@@ -425,7 +415,6 @@ const OrbitControlsSaveBridge = ({ onSave }: { onSave: () => void }) => {
 
 const RiggedMannequin = ({
   keypoints,
-  backgroundImage,
   guide,
   initialEditorState,
   captureMode,
@@ -441,7 +430,6 @@ const RiggedMannequin = ({
   onCanvasSelectWhole,
 }: {
   keypoints: Keypoint[];
-  backgroundImage?: string | null;
   guide?: PoseGuideResponse | null;
   initialEditorState?: PoseEditorState | null;
   captureMode: boolean;
@@ -707,8 +695,6 @@ const RiggedMannequin = ({
       <directionalLight position={[2.5, 4.5, 6]} intensity={1.15} />
       <pointLight position={[0, 0, 8]} intensity={0.72} />
 
-      {backgroundImage && !captureMode && <BackgroundImage url={backgroundImage} />}
-
       <group
         ref={(object) => {
           setPivotObject(object);
@@ -970,6 +956,16 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
 
   return (
     <div className="w-[600px] h-[800px] bg-gradient-to-b from-[#09090e] to-[#040406] rounded-2xl overflow-hidden relative shadow-[0_15px_40px_rgba(0,0,0,0.6)] border border-white/5">
+      {backgroundImage && !captureMode && (
+        <img
+          src={backgroundImage}
+          alt=""
+          draggable={false}
+          className="pointer-events-none absolute inset-0 h-full w-full select-none object-fill"
+          style={{ opacity: BACKGROUND_OPACITY }}
+        />
+      )}
+
       {/* Cybernetic Corner Brackets */}
       <div className="absolute top-3 left-3 w-3 h-3 border-t-2 border-l-2 border-indigo-500/30 pointer-events-none" />
       <div className="absolute top-3 right-3 w-3 h-3 border-t-2 border-r-2 border-indigo-500/30 pointer-events-none" />
@@ -997,7 +993,9 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
 
       <Canvas
         orthographic
+        className="relative z-10"
         camera={{ position: [0, 0, 10], zoom: 100 }}
+        style={{ background: 'transparent' }}
         gl={{ preserveDrawingBuffer: true, alpha: true }}
         onPointerMissed={() => {
           if (activeTarget === 'bone') {
@@ -1010,7 +1008,6 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
         <Suspense fallback={null}>
           <RiggedMannequin
             keypoints={keypoints}
-            backgroundImage={backgroundImage}
             guide={guide}
             initialEditorState={initialEditorState}
             captureMode={captureMode}
