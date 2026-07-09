@@ -67,13 +67,17 @@ body {
 /* Metallic & Gradient text */
 .text-gradient-metallic {
   background: linear-gradient(135deg, #ffffff 0%, #e2e8f0 50%, #94a3b8 100%);
-  -webkit-bg-clip: text;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
   -webkit-text-fill-color: transparent;
 }
 
 .text-gradient-purple {
   background: linear-gradient(135deg, #a855f7 0%, #6366f1 100%);
-  -webkit-bg-clip: text;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
   -webkit-text-fill-color: transparent;
 }
 

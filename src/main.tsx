@@ -6,8 +6,14 @@ import App from './App.tsx'
 const rootElement = document.getElementById('root')
 if (!rootElement) throw new Error('Root element not found')
 
-createRoot(rootElement).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-)
+if (window.location.hostname === '127.0.0.1') {
+  const localUrl = new URL(window.location.href)
+  localUrl.hostname = 'localhost'
+  window.location.replace(localUrl.toString())
+} else {
+  createRoot(rootElement).render(
+    <StrictMode>
+      <App />
+    </StrictMode>,
+  )
+}
