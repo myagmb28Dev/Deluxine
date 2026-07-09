@@ -137,16 +137,32 @@ export class NanoBananaService {
         generationTime: new Date().toISOString(),
       };
     } catch (error) {
-      const isRateLimit = error.response?.status === 429;
-      const message = isRateLimit 
-        ? 'Gemini API Quota Exceeded (429). Please try again in 1 minute.' 
-        : error.response?.data || error.message;
-      
-      this.logger.error('Gemini/NanoBanana API Call Failed', message);
-      
+      const statusCode = error.response?.status;
+      const responseData = error.response?.data;
+      const isRateLimit = statusCode === 429;
+
+      this.logger.error('Gemini/NanoBanana API Call Failed', JSON.stringify({
+        statusCode: statusCode ?? null,
+        responseData: responseData ?? null,
+        message: error.message,
+      }));
+
+      // Throw a normalized error for quota so processor can classify it
       if (isRateLimit) {
-        throw new Error('QUOTA_EXCEEDED');
+        const err = new Error('QUOTA_EXCEEDED');
+        // attach extra info for diagnostics
+        (err as any).details = { statusCode, responseData };
+        throw err;
       }
+
+      // Re-attach response data to the error for upstream logging
+      if (responseData) {
+        const err = new Error(error.message || 'Gemini API Error');
+        (err as any).responseData = responseData;
+        (err as any).statusCode = statusCode;
+        throw err;
+      }
+
       throw error;
     }
   }

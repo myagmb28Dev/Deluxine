@@ -29,9 +29,25 @@ async function bootstrap() {
 
   app.useGlobalFilters(new AllExceptionsFilter(httpAdapter));
 
+  const corsOrigin = configService.get('app.corsOrigin') ?? '*';
+  const isWildcard = corsOrigin === '*';
   app.enableCors({
-    // app.corsOrigin supports '*' or an array of allowed origins (comma-separated via env CORS_ORIGIN)
-    origin: configService.get('app.corsOrigin') ?? '*',
+    // If wildcard configured, reflect origin but disable credentials to avoid wildcard+credentials conflict.
+    origin: isWildcard ? true : corsOrigin,
+    methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization'],
+    credentials: isWildcard ? false : true,
+    // Some platforms expect a 204 for successful preflight responses
+    optionsSuccessStatus: 204,
+  });
+
+  // Simple preflight logger to help debug CORS in production (will not alter response headers)
+  app.use((req, res, next) => {
+    if (req.method === 'OPTIONS') {
+      // eslint-disable-next-line no-console
+      console.log(`[CORS] Preflight ${req.path} origin=${req.headers.origin}`);
+    }
+    next();
   });
 
   const swaggerConfig = new DocumentBuilder()

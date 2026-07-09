@@ -26,6 +26,14 @@ async function bootstrapWorker() {
 
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+  process.on('unhandledRejection', (reason) => {
+    logger.error('Unhandled Rejection in worker: ' + String(reason));
+  });
+
+  process.on('uncaughtException', (err) => {
+    logger.error('Uncaught Exception in worker: ' + (err instanceof Error ? err.stack : String(err)));
+  });
 }
 
 bootstrapWorker();

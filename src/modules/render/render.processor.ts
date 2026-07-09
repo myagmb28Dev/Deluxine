@@ -70,18 +70,30 @@ export class RenderProcessor extends WorkerHost {
       this.logger.log(`Render job ${jobId} completed successfully`);
       return { outputImageKey: outputKey, generationTime: renderResult.generationTime };
     } catch (error) {
-      this.logger.error(`Render job ${jobId} failed: ${error.message}`);
-      
+      // Log full error details
+      this.logger.error(`Render job ${jobId} failed: ${error?.message}`, error?.stack ?? 'no-stack');
+
       const isQuotaError = error.message === 'QUOTA_EXCEEDED';
       const status = isQuotaError ? 'quota_exceeded' : 'failed';
-      
+
+      // Persist last error details into metadata for post-mortem analysis
+      const existingMeta = (renderJob.metadata as Record<string, unknown>) ?? {};
+      existingMeta['lastError'] = {
+        message: error.message,
+        stack: error.stack,
+        ...(error.responseData ? { responseData: error.responseData } : {}),
+        ...(error.details ? { details: error.details } : {}),
+        timestamp: new Date().toISOString(),
+      };
+
+      renderJob.metadata = existingMeta;
       renderJob.status = status;
       await this.renderJobRepository.save(renderJob);
       await this.redisService.set(RedisKeys.renderJobStatus(jobId), status, this.STATUS_TTL);
-      
+
       // SSE 연동을 위해 세션의 현재 포즈 상태도 업데이트 (필요 시)
       await this.redisService.set(RedisKeys.sessionCurrentPose(renderJob.sessionId), status, 600);
-      
+
       throw error;
     }
   }
