@@ -8,6 +8,7 @@ import type { PoseEditorState, PoseGuideResponse, PoseTopologyResponse } from '.
 
 const MODEL_URL = '/models/bane_male_texture_rigged_merged.glb';
 const BACKGROUND_OPACITY = 0.42;
+const DEFAULT_CAMERA_ZOOM = 100;
 const TARGET_MODEL_HEIGHT = 6.4;
 const JOINT_HANDLE_RADIUS = 0.055;
 const POSE_PROJECTION_MAX_WIDTH = 384;
@@ -413,6 +414,36 @@ const OrbitControlsSaveBridge = ({ onSave }: { onSave: () => void }) => {
   return null;
 };
 
+const CameraZoomBridge = ({
+  enabled,
+  onZoomChange,
+}: {
+  enabled: boolean;
+  onZoomChange: (zoom: number) => void;
+}) => {
+  const { camera } = useThree();
+  const lastZoomRef = useRef<number | null>(null);
+
+  const emitZoom = useCallback(() => {
+    const zoom = (camera as THREE.OrthographicCamera).zoom ?? DEFAULT_CAMERA_ZOOM;
+    if (lastZoomRef.current !== null && Math.abs(lastZoomRef.current - zoom) < 0.01) return;
+    lastZoomRef.current = zoom;
+    onZoomChange(zoom);
+  }, [camera, onZoomChange]);
+
+  useEffect(() => {
+    if (!enabled) return;
+    emitZoom();
+  }, [emitZoom, enabled]);
+
+  useFrame(() => {
+    if (!enabled) return;
+    emitZoom();
+  });
+
+  return null;
+};
+
 const RiggedMannequin = ({
   keypoints,
   guide,
@@ -814,6 +845,7 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
   const [isShiftPressed, setIsShiftPressed] = useState(false);
   const [captureMode, setCaptureMode] = useState(false);
   const [captureRequestId, setCaptureRequestId] = useState(0);
+  const [cameraZoom, setCameraZoom] = useState(DEFAULT_CAMERA_ZOOM);
   const [rigState, setRigState] = useState<RigState>({
     isRigged: false,
     canEditBones: false,
@@ -825,6 +857,11 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
   const captureTimeoutRef = useRef<number | null>(null);
   const activeTarget: TransformTarget = rigState.canEditBones ? transformTarget : 'whole';
   const orbitControlsRef = useRef<OrbitControlRef>(null);
+  const backgroundScale = cameraZoom / DEFAULT_CAMERA_ZOOM;
+
+  const handleCameraZoomChange = useCallback((zoom: number) => {
+    setCameraZoom((current) => (Math.abs(current - zoom) < 0.01 ? current : zoom));
+  }, []);
 
   const handleCaptureComplete = useCallback((imageData: string | null) => {
     if (captureTimeoutRef.current) {
@@ -962,7 +999,11 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
           alt=""
           draggable={false}
           className="pointer-events-none absolute inset-0 h-full w-full select-none object-fill"
-          style={{ opacity: BACKGROUND_OPACITY }}
+          style={{
+            opacity: BACKGROUND_OPACITY,
+            transform: `scale(${backgroundScale})`,
+            transformOrigin: 'center center',
+          }}
         />
       )}
 
@@ -1039,6 +1080,10 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
             sessionId={sessionId}
             enabled={!captureMode}
             controlsRef={orbitControlsRef}
+          />
+          <CameraZoomBridge
+            enabled={!captureMode}
+            onZoomChange={handleCameraZoomChange}
           />
         </Suspense>
         <OrbitControls
