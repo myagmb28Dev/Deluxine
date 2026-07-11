@@ -46,9 +46,9 @@ services:
       - key: R2_SIGNED_PUT_TTL_SEC
         value: "60"
 
-      - key: NANO_BANANA_BASE_URL
+      - key: OPENROUTER_API_KEY
         sync: false
-      - key: NANO_BANANA_MODEL
-        sync: false
-      - key: NANO_BANANA_API_KEY
-        sync: false
+      - key: OPENROUTER_BASE_URL
+        value: "https://openrouter.ai/api/v1"
+      - key: OPENROUTER_TIMEOUT_MS
+        value: "600000"

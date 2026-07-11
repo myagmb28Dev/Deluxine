@@ -41,6 +41,8 @@ Deluxine은 유저가 업로드한 원본 선화 일러스트를 기반으로, �
 
 프론트엔드 개발자는 [API_SPECIFICATION.md](./API_SPECIFICATION.md)에서 전체 API 명세와 TypeScript 타입을 확인할 수 있습니다.
 
+렌더 모델 셀렉터와 OpenRouter 전환에 필요한 변경사항, 타입, polling 예제, 오류 처리, QA 항목은 [프론트엔드 렌더 모델 연동 가이드](./docs/FRONTEND_RENDER_MODEL_INTEGRATION.md)를 참고하세요.
+
 ### 주요 특징
 
 - **Google OAuth 로그인**: Bearer JWT 토큰 발급 및 관리
@@ -51,12 +53,14 @@ Deluxine은 유저가 업로드한 원본 선화 일러스트를 기반으로, �
 ### 좌표계 규약
 
 모든 `keypoints`의 `x, y` 좌표는 **정규화 형식(0~1)**입니다.
+
 - `x=0`: 이미지 좌측 끝
 - `x=1`: 이미지 우측 끝
 - `y=0`: 이미지 상단 끝
 - `y=1`: 이미지 하단 끝
 
 프론트에서는 이를 캔버스 크기에 맞춰 변환하여 사용합니다:
+
 ```typescript
 const screenX = keypoint.x * canvasWidth;
 const screenY = keypoint.y * canvasHeight;
@@ -65,13 +69,56 @@ const screenY = keypoint.y * canvasHeight;
 ### CORS & Origin
 
 기본 개발환경 설정:
+
 - FE origin: `http://localhost:5173`
 - BE origin 허용: `.env`의 `CORS_ORIGIN` 설정
 
 ### 보안
 
 모든 세션/포즈/렌더 API는 JWT Bearer 토큰으로 보호됩니다.
+
 ```http
 Authorization: Bearer {access_token}
 ```
 
+## Render Model Selection
+
+The final image renderer uses OpenRouter image models and supports these model IDs:
+
+- `bytedance-seed/seedream-4.5` (value)
+- `black-forest-labs/flux.2-pro` (default, balanced)
+- `sourceful/riverflow-v2.5-pro` (premium)
+
+These are paid OpenRouter model IDs. Usage is deducted from the OpenRouter
+account balance according to each model's current price.
+
+Each authenticated user can create up to two render jobs per UTC day across all
+models and sessions. User usage is available from:
+
+```http
+GET /sessions/{sessionId}/render/usage
+Authorization: Bearer {access_token}
+```
+
+Failed jobs keep their reservation while BullMQ retries. When all attempts end
+in `failed` or `quota_exceeded`, the backend refunds that job exactly once and
+the frontend should refresh the usage endpoint.
+
+Fetch the model selector options for a session:
+
+```http
+GET /sessions/{sessionId}/render/models
+Authorization: Bearer {access_token}
+```
+
+Pass the selected model when creating a render job:
+
+```json
+{
+  "model": "black-forest-labs/flux.2-pro",
+  "prompt": "Keep the original character design and background.",
+  "poseProjectionImage": "data:image/png;base64,..."
+}
+```
+
+If `model` is omitted, the backend uses `black-forest-labs/flux.2-pro`.

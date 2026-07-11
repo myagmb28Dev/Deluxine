@@ -9,10 +9,12 @@ import { AuthModule } from '../auth/auth.module';
 import { R2Module } from '../r2/r2.module';
 import { RenderController } from './render.controller';
 import { RenderService } from './render.service';
-import { NanoBananaService } from './nano-banana.service';
+import { OpenRouterImageService } from './openrouter-image.service';
 import { RenderProcessor } from './render.processor';
+import { RenderUsageService } from './render-usage.service';
 
-const enableQueueProcessors = (process.env.ENABLE_QUEUE_PROCESSORS ?? 'true') !== 'false';
+const enableQueueProcessors =
+  (process.env.ENABLE_QUEUE_PROCESSORS ?? 'true') !== 'false';
 
 @Module({
   imports: [
@@ -27,6 +29,11 @@ const enableQueueProcessors = (process.env.ENABLE_QUEUE_PROCESSORS ?? 'true') !=
     }),
   ],
   controllers: [RenderController],
-  providers: [RenderService, NanoBananaService, ...(enableQueueProcessors ? [RenderProcessor] : [])],
+  providers: [
+    RenderService,
+    RenderUsageService,
+    OpenRouterImageService,
+    ...(enableQueueProcessors ? [RenderProcessor] : []),
+  ],
 })
 export class RenderModule {}

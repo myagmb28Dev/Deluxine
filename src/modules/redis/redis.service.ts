@@ -15,7 +15,8 @@ export class RedisService implements OnModuleDestroy {
   }
 
   async set(key: string, value: string | number | object, ttl?: number) {
-    const serialized = typeof value === 'object' ? JSON.stringify(value) : String(value);
+    const serialized =
+      typeof value === 'object' ? JSON.stringify(value) : String(value);
     if (ttl) {
       return this.redisClient.set(key, serialized, 'EX', ttl);
     }
@@ -48,6 +49,19 @@ export class RedisService implements OnModuleDestroy {
 
   async incr(key: string): Promise<number> {
     return this.redisClient.incr(key);
+  }
+
+  async eval<T = unknown>(
+    script: string,
+    keys: string[],
+    args: string[],
+  ): Promise<T> {
+    return this.redisClient.eval(
+      script,
+      keys.length,
+      ...keys,
+      ...args,
+    ) as Promise<T>;
   }
 
   async expire(key: string, seconds: number): Promise<boolean> {

@@ -11,6 +11,14 @@ export class RedisKeys {
     return `render_job:${jobId}:status`;
   }
 
+  static renderUserUsageDay(userId: string, day: string): string {
+    return `render:usage:user:${userId}:day:${day}`;
+  }
+
+  static renderUsageRefundJob(jobId: string): string {
+    return `render:usage:refund:job:${jobId}`;
+  }
+
   static tempPoseKeypoints(sessionId: string): string {
     return `temp:pose:${sessionId}:keypoints`;
   }
