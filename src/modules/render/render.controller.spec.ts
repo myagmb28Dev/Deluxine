@@ -10,6 +10,9 @@ describe('RenderController usage reservation', () => {
     render: jest.fn(),
     listHistory: jest.fn(),
     deleteHistoryItem: jest.fn(),
+    findJobByIdForUser: jest.fn(),
+    getJobStatus: jest.fn(),
+    getJobProgress: jest.fn(),
   };
   const sessionService = {
     findById: jest.fn(),
@@ -82,26 +85,53 @@ describe('RenderController usage reservation', () => {
   });
 
   it('includes server progress in a running render job response', async () => {
-    Object.assign(renderService, {
-      getJobStatus: jest.fn().mockResolvedValue('running'),
-      getJobProgress: jest.fn().mockResolvedValue({
-        progress: 35,
-        phase: 'generating',
-        message: 'AI가 이미지를 생성하고 있습니다.',
-      }),
+    renderService.findJobByIdForUser.mockResolvedValue({
+      id: 'job-1',
+      status: 'running',
+      outputImageKey: null,
+      metadata: {},
+      createdAt: new Date('2026-07-11T09:00:00.000Z'),
+      updatedAt: new Date('2026-07-11T09:00:01.000Z'),
+    });
+    renderService.getJobStatus.mockResolvedValue('running');
+    renderService.getJobProgress.mockResolvedValue({
+      progress: 35,
+      phase: 'generating',
+      message: 'AI가 이미지를 생성하고 있습니다.',
     });
 
-    await expect(controller.getJobStatus('job-1')).resolves.toEqual({
+    await expect(
+      controller.getJobStatus('session-1', 'job-1', {
+        user: { id: 'user-1' } as User,
+      }),
+    ).resolves.toEqual({
       job_id: 'job-1',
       status: 'running',
       progress: 35,
       phase: 'generating',
       progress_message: 'AI가 이미지를 생성하고 있습니다.',
       output_image: null,
-      model: null,
-      created_at: null,
-      updated_at: null,
+      model: expect.any(String),
+      created_at: new Date('2026-07-11T09:00:00.000Z'),
+      updated_at: new Date('2026-07-11T09:00:01.000Z'),
     });
+    expect(renderService.findJobByIdForUser).toHaveBeenCalledWith(
+      'job-1',
+      'session-1',
+      'user-1',
+    );
+  });
+
+  it('does not expose another users render job status', async () => {
+    renderService.findJobByIdForUser.mockResolvedValue(null);
+
+    await expect(
+      controller.getJobStatus('session-2', 'job-1', {
+        user: { id: 'user-2' } as User,
+      }),
+    ).rejects.toThrow('Render job not found');
+
+    expect(renderService.getJobStatus).not.toHaveBeenCalled();
   });
 
   it('deletes an owned render history item', async () => {

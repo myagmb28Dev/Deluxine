@@ -13,9 +13,9 @@ import { RedisService } from '../redis/redis.service';
 import { RedisKeys } from '../redis/redis.keys';
 import { R2Service } from '../r2/r2.service';
 import { DEFAULT_RENDER_MODEL } from './render-model';
-import { RenderQueuePayload } from './render-job.types';
-import { RenderProgressSnapshot } from './render-job.types';
+import { RenderProgressSnapshot, RenderQueuePayload } from './render-job.types';
 import { RenderUsageService } from './render-usage.service';
+import { RENDER_PROGRESS } from './render-progress';
 
 interface RenderQueueResult {
   outputImageKey: string;
@@ -70,19 +70,11 @@ export class RenderProcessor extends WorkerHost {
         'running',
         this.STATUS_TTL,
       );
-      await this.updateProgress(jobId, {
-        progress: 15,
-        phase: 'preparing',
-        message: '렌더링 입력을 준비하고 있습니다.',
-      });
+      await this.updateProgress(jobId, RENDER_PROGRESS.preparing);
 
       // A signed URL keeps large R2 images out of the OpenRouter request body.
       const lineArtImage = (await this.r2Service.presignGet(lineArtKey)).url;
-      await this.updateProgress(jobId, {
-        progress: 35,
-        phase: 'generating',
-        message: 'AI가 이미지를 생성하고 있습니다.',
-      });
+      await this.updateProgress(jobId, RENDER_PROGRESS.generating);
       const renderResult = await this.openRouterImageService.render({
         model,
         lineArtImage,
@@ -90,11 +82,7 @@ export class RenderProcessor extends WorkerHost {
         prompt,
         poseProjectionImage,
       });
-      await this.updateProgress(jobId, {
-        progress: 90,
-        phase: 'uploading',
-        message: '생성된 이미지를 저장하고 있습니다.',
-      });
+      await this.updateProgress(jobId, RENDER_PROGRESS.uploading);
 
       const extension = this.extensionForMimeType(renderResult.outputMimeType);
       const outputKey = this.r2Service.buildKey([
@@ -132,11 +120,7 @@ export class RenderProcessor extends WorkerHost {
         'completed',
         this.STATUS_TTL,
       );
-      await this.updateProgress(jobId, {
-        progress: 100,
-        phase: 'completed',
-        message: '이미지 생성이 완료되었습니다.',
-      });
+      await this.updateProgress(jobId, RENDER_PROGRESS.completed);
 
       this.logger.log(`Render job ${jobId} completed successfully`);
       return {
@@ -190,14 +174,12 @@ export class RenderProcessor extends WorkerHost {
           status,
           600,
         );
-        await this.updateProgress(jobId, {
-          progress: -1,
-          phase: 'failed',
-          message:
-            status === 'quota_exceeded'
-              ? '이미지 생성 한도가 소진되었습니다.'
-              : '이미지 생성에 실패했습니다.',
-        });
+        await this.updateProgress(
+          jobId,
+          status === 'quota_exceeded'
+            ? RENDER_PROGRESS.quotaExceeded
+            : RENDER_PROGRESS.failed,
+        );
       } else {
         renderJob.status = 'running';
         await this.renderJobRepository.save(renderJob);
@@ -206,11 +188,7 @@ export class RenderProcessor extends WorkerHost {
           'running',
           this.STATUS_TTL,
         );
-        await this.updateProgress(jobId, {
-          progress: 5,
-          phase: 'queued',
-          message: '이미지 생성을 다시 시도하기 위해 대기 중입니다.',
-        });
+        await this.updateProgress(jobId, RENDER_PROGRESS.retrying);
       }
 
       throw error;

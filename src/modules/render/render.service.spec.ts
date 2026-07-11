@@ -56,6 +56,9 @@ describe('RenderService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    repository.findOne.mockResolvedValue(null);
+    repository.delete.mockResolvedValue({ affected: 1 });
+    renderQueue.add.mockResolvedValue({ id: 'job-1' });
     repository.create.mockImplementation((value) => value);
     repository.save.mockImplementation((value) =>
       Promise.resolve({
@@ -96,6 +99,42 @@ describe('RenderService', () => {
       expect.any(Object),
     );
     expect(result.model).toBe(RenderModel.SEEDREAM_4_5);
+  });
+
+  it('removes the pending job and cache when queue insertion fails', async () => {
+    renderQueue.add.mockRejectedValue(new Error('QUEUE_UNAVAILABLE'));
+
+    await expect(
+      service.render({
+        sessionId: 'session-1',
+        userId: 'user-1',
+        lineArtKey: 'users/user-1/line-art.png',
+        chosenPose: { keypoints: [] },
+        prompt: '',
+        model: RenderModel.SEEDREAM_4_5,
+        usageDay: '2026-07-11',
+        history: [],
+      }),
+    ).rejects.toThrow('QUEUE_UNAVAILABLE');
+
+    expect(repository.delete).toHaveBeenCalledWith({ id: 'job-1' });
+    expect(redisService.del).toHaveBeenCalledWith('render_job:job-1:status');
+    expect(redisService.del).toHaveBeenCalledWith('render_job:job-1:progress');
+  });
+
+  it('loads a render job only through its owning session and user', async () => {
+    repository.findOne.mockResolvedValue({ id: 'job-1' });
+
+    await service.findJobByIdForUser('job-1', 'session-1', 'user-1');
+
+    expect(repository.findOne).toHaveBeenCalledWith({
+      where: {
+        id: 'job-1',
+        sessionId: 'session-1',
+        session: { userId: 'user-1' },
+      },
+      relations: { session: true },
+    });
   });
 
   it('lists only completed outputs owned by the user with signed URLs', async () => {
@@ -200,6 +239,7 @@ describe('RenderService', () => {
   it('deletes an owned history output without deleting its session', async () => {
     repository.findOne.mockResolvedValue({
       id: 'job-1',
+      status: 'completed',
       outputImageKey: 'renders/job-1.webp',
       session: { userId: 'user-1' },
     });
@@ -225,6 +265,22 @@ describe('RenderService', () => {
     repository.findOne.mockResolvedValue(null);
 
     await expect(service.deleteHistoryItem('user-2', 'job-1')).resolves.toBe(
+      false,
+    );
+
+    expect(r2Service.deleteObjects).not.toHaveBeenCalled();
+    expect(repository.delete).not.toHaveBeenCalled();
+  });
+
+  it('does not delete an owned render job that is still running', async () => {
+    repository.findOne.mockResolvedValue({
+      id: 'job-1',
+      status: 'running',
+      outputImageKey: null,
+      session: { userId: 'user-1' },
+    });
+
+    await expect(service.deleteHistoryItem('user-1', 'job-1')).resolves.toBe(
       false,
     );
 

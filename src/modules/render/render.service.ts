@@ -14,6 +14,7 @@ import {
 } from './render-job.types';
 import { ListRenderHistoryDto } from './dto/list-render-history.dto';
 import { DEFAULT_RENDER_MODEL } from './render-model';
+import { RENDER_PROGRESS } from './render-progress';
 
 type RenderHistoryCursor = {
   createdAt: string;
@@ -52,40 +53,45 @@ export class RenderService {
     });
 
     const saved = await this.renderJobRepository.save(job);
-    await this.updateJobStatus(saved.id, 'pending');
-    await this.updateJobProgress(saved.id, {
-      progress: 5,
-      phase: 'queued',
-      message: '렌더링 작업이 대기열에 등록되었습니다.',
-    });
+    try {
+      await this.updateJobStatus(saved.id, 'pending');
+      await this.updateJobProgress(saved.id, RENDER_PROGRESS.queued);
 
-    this.logger.log(
-      `Enqueuing render job ${saved.id} for session ${input.sessionId}`,
-    );
+      this.logger.log(
+        `Enqueuing render job ${saved.id} for session ${input.sessionId}`,
+      );
 
-    // 큐에 작업 추가 (비동기 처리)
-    await this.renderQueue.add(
-      'process-render',
-      {
-        jobId: saved.id,
-        sessionId: input.sessionId,
-        userId: input.userId,
-        lineArtKey: input.lineArtKey,
-        chosenPose: input.chosenPose,
-        prompt: input.prompt,
-        model: input.model,
-        poseProjectionImage: input.poseProjectionImage,
-        usageDay: input.usageDay,
-      },
-      {
-        jobId: saved.id,
-        attempts: 5, // 재시도 횟수 증가
-        backoff: {
-          type: 'exponential',
-          delay: 10000, // 기본 대기 시간을 10초로 늘림 (429 대응)
+      // 큐에 작업 추가 (비동기 처리)
+      await this.renderQueue.add(
+        'process-render',
+        {
+          jobId: saved.id,
+          sessionId: input.sessionId,
+          userId: input.userId,
+          lineArtKey: input.lineArtKey,
+          chosenPose: input.chosenPose,
+          prompt: input.prompt,
+          model: input.model,
+          poseProjectionImage: input.poseProjectionImage,
+          usageDay: input.usageDay,
         },
-      },
-    );
+        {
+          jobId: saved.id,
+          attempts: 5, // 재시도 횟수 증가
+          backoff: {
+            type: 'exponential',
+            delay: 10000, // 기본 대기 시간을 10초로 늘림 (429 대응)
+          },
+        },
+      );
+    } catch (error) {
+      await Promise.allSettled([
+        this.renderJobRepository.delete({ id: saved.id }),
+        this.redisService.del(RedisKeys.renderJobStatus(saved.id)),
+        this.redisService.del(RedisKeys.renderJobProgress(saved.id)),
+      ]);
+      throw error;
+    }
 
     return {
       job_id: saved.id,
@@ -129,8 +135,11 @@ export class RenderService {
     );
   }
 
-  async findJobById(jobId: string) {
-    return this.renderJobRepository.findOne({ where: { id: jobId } });
+  async findJobByIdForUser(jobId: string, sessionId: string, userId: string) {
+    return this.renderJobRepository.findOne({
+      where: { id: jobId, sessionId, session: { userId } },
+      relations: { session: true },
+    });
   }
 
   async listHistory(userId: string, query: ListRenderHistoryDto) {
@@ -205,7 +214,7 @@ export class RenderService {
       where: { id: jobId, session: { userId } },
       relations: { session: true },
     });
-    if (!job) {
+    if (!job || job.status !== 'completed' || !job.outputImageKey) {
       return false;
     }
 
