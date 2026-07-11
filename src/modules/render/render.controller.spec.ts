@@ -1,12 +1,12 @@
 import { User } from '../../entities/user.entity';
 import { PoseService } from '../pose/pose.service';
 import { SessionService } from '../session/session.service';
-import { RenderController } from './render.controller';
+import { RenderController, RenderHistoryController } from './render.controller';
 import { RenderService } from './render.service';
 import { RenderUsageService } from './render-usage.service';
 
 describe('RenderController usage reservation', () => {
-  const renderService = { render: jest.fn() };
+  const renderService = { render: jest.fn(), listHistory: jest.fn() };
   const sessionService = {
     findById: jest.fn(),
     appendHistory: jest.fn(),
@@ -21,6 +21,9 @@ describe('RenderController usage reservation', () => {
     sessionService as unknown as SessionService,
     poseService as unknown as PoseService,
     renderUsageService as unknown as RenderUsageService,
+  );
+  const historyController = new RenderHistoryController(
+    renderService as unknown as RenderService,
   );
 
   beforeEach(() => {
@@ -54,5 +57,23 @@ describe('RenderController usage reservation', () => {
       'user-1',
       '2026-07-10',
     );
+  });
+
+  it('lists render history for the authenticated user', async () => {
+    renderService.listHistory.mockResolvedValue({
+      items: [],
+      next_cursor: null,
+    });
+
+    await expect(
+      historyController.listHistory(
+        { limit: 20 },
+        { user: { id: 'user-1' } as User },
+      ),
+    ).resolves.toEqual({ items: [], next_cursor: null });
+
+    expect(renderService.listHistory).toHaveBeenCalledWith('user-1', {
+      limit: 20,
+    });
   });
 });

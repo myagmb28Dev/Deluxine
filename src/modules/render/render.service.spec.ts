@@ -8,6 +8,15 @@ import { RenderModel } from './render-model';
 import { RenderQueuePayload } from './render-job.types';
 
 describe('RenderService', () => {
+  const queryBuilder = {
+    innerJoinAndSelect: jest.fn().mockReturnThis(),
+    where: jest.fn().mockReturnThis(),
+    andWhere: jest.fn().mockReturnThis(),
+    orderBy: jest.fn().mockReturnThis(),
+    addOrderBy: jest.fn().mockReturnThis(),
+    take: jest.fn().mockReturnThis(),
+    getMany: jest.fn(),
+  };
   const repository = {
     create: jest.fn(
       (value: DeepPartial<RenderJob>): RenderJob => value as RenderJob,
@@ -16,6 +25,7 @@ describe('RenderService', () => {
       (value: RenderJob): Promise<RenderJob> => Promise.resolve(value),
     ),
     findOne: jest.fn((): Promise<RenderJob | null> => Promise.resolve(null)),
+    createQueryBuilder: jest.fn(() => queryBuilder),
   };
   const redisService = {
     set: jest.fn((): Promise<'OK'> => Promise.resolve('OK')),
@@ -50,6 +60,7 @@ describe('RenderService', () => {
         id: 'job-1',
       }),
     );
+    queryBuilder.getMany.mockResolvedValue([]);
   });
 
   it('persists and enqueues the user-selected model', async () => {
@@ -82,5 +93,86 @@ describe('RenderService', () => {
       expect.any(Object),
     );
     expect(result.model).toBe(RenderModel.SEEDREAM_4_5);
+  });
+
+  it('lists only completed outputs owned by the user with signed URLs', async () => {
+    queryBuilder.getMany.mockResolvedValue([
+      {
+        id: 'job-2',
+        sessionId: 'session-1',
+        session: { title: 'Gesture study' },
+        prompt: 'Keep the line art.',
+        outputImageKey: 'renders/job-2.webp',
+        metadata: { model: RenderModel.SEEDREAM_4_5 },
+        createdAt: new Date('2026-07-11T09:00:00.000Z'),
+      },
+    ]);
+
+    const result = await service.listHistory('user-1', { limit: 20 });
+
+    expect(queryBuilder.innerJoinAndSelect).toHaveBeenCalledWith(
+      'job.session',
+      'session',
+    );
+    expect(queryBuilder.where).toHaveBeenCalledWith(
+      'session.userId = :userId',
+      {
+        userId: 'user-1',
+      },
+    );
+    expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+      'job.status = :completedStatus',
+      { completedStatus: 'completed' },
+    );
+    expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+      'job.outputImageKey IS NOT NULL',
+    );
+    expect(queryBuilder.take).toHaveBeenCalledWith(21);
+    expect(r2Service.presignGet).toHaveBeenCalledWith('renders/job-2.webp');
+    expect(result).toEqual({
+      items: [
+        {
+          job_id: 'job-2',
+          session_id: 'session-1',
+          session_title: 'Gesture study',
+          output_image: 'https://cdn.example.com/output.png',
+          model: RenderModel.SEEDREAM_4_5,
+          prompt: 'Keep the line art.',
+          created_at: '2026-07-11T09:00:00.000Z',
+        },
+      ],
+      next_cursor: null,
+    });
+  });
+
+  it('uses a deterministic cursor and returns the next page cursor', async () => {
+    const jobs = Array.from({ length: 3 }, (_, index) => ({
+      id: `job-${3 - index}`,
+      sessionId: 'session-1',
+      session: { title: null },
+      prompt: '',
+      outputImageKey: `renders/job-${3 - index}.webp`,
+      metadata: {},
+      createdAt: new Date(`2026-07-11T09:00:0${3 - index}.000Z`),
+    }));
+    queryBuilder.getMany.mockResolvedValue(jobs);
+
+    const firstPage = await service.listHistory('user-1', { limit: 2 });
+    expect(firstPage.items).toHaveLength(2);
+    expect(firstPage.next_cursor).toEqual(expect.any(String));
+
+    queryBuilder.getMany.mockResolvedValue([]);
+    await service.listHistory('user-1', {
+      limit: 2,
+      cursor: firstPage.next_cursor!,
+    });
+
+    expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+      '(job.createdAt < :cursorCreatedAt OR (job.createdAt = :cursorCreatedAt AND job.id < :cursorId))',
+      {
+        cursorCreatedAt: new Date('2026-07-11T09:00:02.000Z'),
+        cursorId: 'job-2',
+      },
+    );
   });
 });

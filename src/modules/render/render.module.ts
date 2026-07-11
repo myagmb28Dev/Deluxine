@@ -7,7 +7,7 @@ import { PoseModule } from '../pose/pose.module';
 import { SessionModule } from '../session/session.module';
 import { AuthModule } from '../auth/auth.module';
 import { R2Module } from '../r2/r2.module';
-import { RenderController } from './render.controller';
+import { RenderController, RenderHistoryController } from './render.controller';
 import { RenderService } from './render.service';
 import { OpenRouterImageService } from './openrouter-image.service';
 import { RenderProcessor } from './render.processor';
@@ -28,7 +28,7 @@ const enableQueueProcessors =
       name: 'render',
     }),
   ],
-  controllers: [RenderController],
+  controllers: [RenderController, RenderHistoryController],
   providers: [
     RenderService,
     RenderUsageService,

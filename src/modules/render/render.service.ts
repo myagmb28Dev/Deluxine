@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { InjectQueue } from '@nestjs/bullmq';
@@ -8,6 +8,13 @@ import { RedisKeys } from '../redis/redis.keys';
 import { RedisService } from '../redis/redis.service';
 import { R2Service } from '../r2/r2.service';
 import { CreateRenderJobInput, RenderQueuePayload } from './render-job.types';
+import { ListRenderHistoryDto } from './dto/list-render-history.dto';
+import { DEFAULT_RENDER_MODEL } from './render-model';
+
+type RenderHistoryCursor = {
+  createdAt: string;
+  id: string;
+};
 
 @Injectable()
 export class RenderService {
@@ -101,5 +108,94 @@ export class RenderService {
 
   async findJobById(jobId: string) {
     return this.renderJobRepository.findOne({ where: { id: jobId } });
+  }
+
+  async listHistory(userId: string, query: ListRenderHistoryDto) {
+    const limit = query.limit ?? 20;
+    const builder = this.renderJobRepository
+      .createQueryBuilder('job')
+      .innerJoinAndSelect('job.session', 'session')
+      .where('session.userId = :userId', { userId })
+      .andWhere('job.status = :completedStatus', {
+        completedStatus: 'completed',
+      })
+      .andWhere('job.outputImageKey IS NOT NULL');
+
+    if (query.cursor) {
+      const cursor = this.decodeHistoryCursor(query.cursor);
+      builder.andWhere(
+        '(job.createdAt < :cursorCreatedAt OR (job.createdAt = :cursorCreatedAt AND job.id < :cursorId))',
+        {
+          cursorCreatedAt: new Date(cursor.createdAt),
+          cursorId: cursor.id,
+        },
+      );
+    }
+
+    const jobs = await builder
+      .orderBy('job.createdAt', 'DESC')
+      .addOrderBy('job.id', 'DESC')
+      .take(limit + 1)
+      .getMany();
+    const hasNextPage = jobs.length > limit;
+    const pageJobs = jobs.slice(0, limit);
+
+    const presented = await Promise.all(
+      pageJobs.map(async (job) => {
+        try {
+          const output = await this.r2Service.presignGet(job.outputImageKey!);
+          return {
+            job_id: job.id,
+            session_id: job.sessionId,
+            session_title: job.session?.title ?? null,
+            output_image: output.url,
+            model:
+              (job.metadata?.model as string | undefined) ??
+              DEFAULT_RENDER_MODEL,
+            prompt: job.prompt,
+            created_at: job.createdAt.toISOString(),
+          };
+        } catch (error) {
+          this.logger.warn(
+            `Unable to sign render history output for job ${job.id}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          return null;
+        }
+      }),
+    );
+
+    const lastJob = hasNextPage ? pageJobs.at(-1) : undefined;
+    return {
+      items: presented.filter((item) => item !== null),
+      next_cursor: lastJob
+        ? this.encodeHistoryCursor({
+            createdAt: lastJob.createdAt.toISOString(),
+            id: lastJob.id,
+          })
+        : null,
+    };
+  }
+
+  private encodeHistoryCursor(cursor: RenderHistoryCursor) {
+    return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
+  }
+
+  private decodeHistoryCursor(value: string): RenderHistoryCursor {
+    try {
+      const parsed = JSON.parse(
+        Buffer.from(value, 'base64url').toString('utf8'),
+      ) as Partial<RenderHistoryCursor>;
+      if (
+        typeof parsed.createdAt !== 'string' ||
+        Number.isNaN(new Date(parsed.createdAt).getTime()) ||
+        typeof parsed.id !== 'string' ||
+        parsed.id.length === 0
+      ) {
+        throw new Error('invalid cursor payload');
+      }
+      return { createdAt: parsed.createdAt, id: parsed.id };
+    } catch {
+      throw new BadRequestException('invalid render history cursor');
+    }
   }
 }

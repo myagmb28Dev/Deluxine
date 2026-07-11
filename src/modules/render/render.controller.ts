@@ -6,6 +6,7 @@ import {
   Param,
   Post,
   Req,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiOperation, ApiTags, ApiBearerAuth } from '@nestjs/swagger';
@@ -21,6 +22,24 @@ import {
   RENDER_USER_USAGE_POLICY,
 } from './render-model';
 import { RenderUsageService } from './render-usage.service';
+import { ListRenderHistoryDto } from './dto/list-render-history.dto';
+
+@ApiTags('render')
+@ApiBearerAuth()
+@UseGuards(FirebaseAuthGuard)
+@Controller('render')
+export class RenderHistoryController {
+  constructor(private readonly renderService: RenderService) {}
+
+  @Get('history')
+  @ApiOperation({ summary: 'List completed render outputs owned by the user' })
+  listHistory(
+    @Query() query: ListRenderHistoryDto,
+    @Req() req: { user: User },
+  ) {
+    return this.renderService.listHistory(req.user.id, query);
+  }
+}
 
 @ApiTags('render')
 @ApiBearerAuth()

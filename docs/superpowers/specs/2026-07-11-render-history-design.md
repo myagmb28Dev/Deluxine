@@ -48,25 +48,9 @@ Items are ordered by `createdAt DESC, id DESC`. The cursor contains both fields 
 - The existing job-status endpoint and render creation contract remain unchanged.
 - No database migration is required because `render_jobs.sessionId`, status, timestamps, metadata, and output keys already exist.
 
-## Frontend Experience
+## Frontend Contract Boundary
 
-The sidebar session area becomes a two-tab control:
-
-- `세션`: preserves the current session list and management behavior.
-- `히스토리`: shows completed outputs from every session, newest first.
-
-Each history item shows a thumbnail, session title, model name, and Korean-localized creation time. Selecting an item navigates to its `sessionId`, restores the session editor, and displays that exact output as the selected final image. This selection must not depend on the local-storage last-job entry.
-
-The history tab includes loading, empty, error with retry, and `더 보기` states. Newly completed renders are prepended or the first page is refreshed so the user sees the result without reloading the application.
-
-## Frontend Data Flow
-
-1. Opening the history tab requests `GET /render/history?limit=20`.
-2. `더 보기` supplies `next_cursor` and appends unique jobs.
-3. Selecting a history item sets the URL session query parameter and records the selected history output.
-4. Session restoration loads pose and line-art data as it does today.
-5. After restoration, the explicitly selected history image takes precedence over local-storage job recovery.
-6. A direct session selection without a selected history item may show the newest completed render returned by a session-aware lookup or remain without an output until history is selected. This feature guarantees recovery through the history tab.
+Frontend implementation is out of scope for this backend change. The backend provides the authenticated history endpoint, stable pagination contract, session identifiers, and fresh signed output URLs. The frontend team owns tab layout, loading and error states, session navigation, and selected-image presentation.
 
 ## Error Handling
 
@@ -79,5 +63,4 @@ The history tab includes loading, empty, error with retry, and `더 보기` stat
 
 Backend tests cover ownership filtering, completed-only filtering, deterministic pagination, page-size validation, and signed URL presentation.
 
-Frontend tests cover tab switching, loading and empty states, pagination append behavior, retry, and selecting an output to restore its session and image. Production builds for both repositories must pass.
-
+The backend build and complete backend test suite must pass. The frontend contract is documented separately in `docs/FRONTEND_RENDER_HISTORY_API.md`.
