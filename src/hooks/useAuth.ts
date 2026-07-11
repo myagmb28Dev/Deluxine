@@ -1,7 +1,14 @@
 ﻿import { useState, useEffect } from 'react';
-import { getRedirectResult, onAuthStateChanged, signInWithRedirect, signOut } from 'firebase/auth';
+import {
+  getRedirectResult,
+  onAuthStateChanged,
+  signInWithPopup,
+  signInWithRedirect,
+  signOut,
+} from 'firebase/auth';
 import type { User } from 'firebase/auth';
 import { auth, googleProvider } from '../lib/firebase';
+import { shouldFallbackToRedirect } from '../lib/authPopup';
 import { authApi } from '../api/client';
 import type { MeResponse } from '../types/api';
 
@@ -42,8 +49,18 @@ export const useAuth = () => {
   const login = async () => {
     try {
       setIsLoading(true);
-      await signInWithRedirect(auth, googleProvider);
+      await signInWithPopup(auth, googleProvider);
     } catch (error) {
+      if (shouldFallbackToRedirect(error)) {
+        try {
+          await signInWithRedirect(auth, googleProvider);
+        } catch (redirectError) {
+          console.error('Redirect login failed:', redirectError);
+          setIsLoading(false);
+        }
+        return;
+      }
+
       console.error('Login failed:', error);
       setIsLoading(false);
     }
@@ -55,7 +72,11 @@ export const useAuth = () => {
       await signOut(auth);
       // 백엔드 로그아웃 API가 있다면 호출 (선택 사항)
       if (user) {
-        try { await authApi.logout(user.uid); } catch (e) {}
+        try {
+          await authApi.logout(user.uid);
+        } catch (logoutError) {
+          console.warn('Backend logout failed:', logoutError);
+        }
       }
     } catch (error) {
       console.error('Logout failed:', error);

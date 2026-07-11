@@ -2,7 +2,7 @@ export type ApiError = {
   statusCode: number;
   timestamp: string;
   path: string;
-  message: string;
+  message: string | string[];
 };
 
 export type HistoryItem = {
@@ -87,7 +87,47 @@ export type UpdateSessionRequest = {
   title?: string;
 };
 
+export type RenderModelId =
+  | 'black-forest-labs/flux.2-pro:free'
+  | 'bytedance-seed/seedream-4.5:free'
+  | 'sourceful/riverflow-v2.5-pro:free';
+
+export type RenderModelTier = 'balanced' | 'value' | 'premium';
+export type RenderModelPricing = 'free';
+
+export type RenderModelOption = {
+  id: RenderModelId;
+  name: string;
+  tier: RenderModelTier;
+  pricing: RenderModelPricing;
+  description: string;
+};
+
+export type RenderUsagePolicy = {
+  requests_per_day: 2;
+  scope: 'user';
+  remaining_requests_available: true;
+};
+
+export type RenderModelListResponse = {
+  default_model: RenderModelId;
+  models: RenderModelOption[];
+  usage_policy: RenderUsagePolicy;
+};
+
+export type RenderUsageResponse = {
+  scope: 'user';
+  daily: {
+    used: number;
+    limit: 2;
+    remaining: number;
+    resets_at: string;
+  };
+  tracked_at: string;
+};
+
 export type CreateRenderRequest = {
+  model?: RenderModelId;
   prompt: string;
   poseProjectionImage?: string;
 };
@@ -96,9 +136,10 @@ export type CreateRenderResponse = {
   job_id: string;
   status: 'pending';
   message: string;
-  line_art: string;
-  chosen_pose: string;
+  line_art_key: string;
+  chosen_pose: unknown;
   prompt_used: string;
+  model: RenderModelId;
   history: HistoryItem[];
 };
 
@@ -108,9 +149,9 @@ export type RenderJobResponse = {
   job_id: string;
   status: RenderJobStatus;
   output_image: string | null;
-  created_at: string;
-  updated_at: string;
-  progress?: number;
+  model: RenderModelId | null;
+  created_at: string | null;
+  updated_at: string | null;
 };
 
 export type MeResponse = {

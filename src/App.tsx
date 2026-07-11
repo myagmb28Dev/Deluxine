@@ -8,8 +8,22 @@ import { usePoseEditor } from './hooks/usePoseEditor';
 import { useAuth } from './hooks/useAuth';
 import { sessionApi, poseApi, renderApi } from './api/client';
 import type { PipelineStatus, Keypoint } from './types';
-import type { PoseEditorState, PoseGuideResponse, PoseTopologyResponse, SessionListItem } from './types/api';
+import type {
+  PoseEditorState,
+  PoseGuideResponse,
+  PoseTopologyResponse,
+  RenderModelId,
+  RenderModelListResponse,
+  RenderUsageResponse,
+  SessionListItem,
+} from './types/api';
 import { AnimatePresence, motion } from 'framer-motion';
+import {
+  isRenderUsageExhausted,
+  normalizeApiMessage,
+  selectCatalogModel,
+} from './lib/renderModel';
+import { estimateRenderProgress } from './lib/renderProgress';
 
 type SessionOverrides = Record<string, { title?: string; hidden?: boolean }>;
 const SESSION_OVERRIDES_KEY = 'deluxine_session_overrides';
@@ -125,9 +139,8 @@ const getErrorMessage = (error: unknown, fallback: string) => {
   const data = maybeAxiosError.response?.data;
 
   if (data && typeof data === 'object') {
-    const body = data as { message?: string; error?: string; detail?: string };
-    const responseMessage = body.message || body.error || body.detail;
-    if (responseMessage) return responseMessage;
+    const body = data as { message?: unknown; error?: unknown; detail?: unknown };
+    return normalizeApiMessage(body.message ?? body.error ?? body.detail, fallback);
   }
 
   if (typeof data === 'string' && data.trim()) return data;
@@ -137,8 +150,8 @@ const getErrorMessage = (error: unknown, fallback: string) => {
 
 const getRenderFailureMessage = (response: unknown, fallback: string) => {
   if (response && typeof response === 'object') {
-    const body = response as { message?: string; error?: string; detail?: string };
-    return body.message || body.error || body.detail || fallback;
+    const body = response as { message?: unknown; error?: unknown; detail?: unknown };
+    return normalizeApiMessage(body.message ?? body.error ?? body.detail, fallback);
   }
   return fallback;
 };
@@ -171,6 +184,13 @@ const AppContent: React.FC = () => {
   const [finalImage, setFinalImage] = useState<string | null>(null);
   const [lineArtImage, setLineArtImage] = useState<string | null>(null);
   const [renderErrorMessage, setRenderErrorMessage] = useState<string | null>(null);
+  const [renderModels, setRenderModels] = useState<RenderModelListResponse | null>(null);
+  const [selectedModel, setSelectedModel] = useState<RenderModelId | null>(null);
+  const [isLoadingModels, setIsLoadingModels] = useState(false);
+  const [modelErrorMessage, setModelErrorMessage] = useState<string | null>(null);
+  const [renderUsage, setRenderUsage] = useState<RenderUsageResponse | null>(null);
+  const [isLoadingUsage, setIsLoadingUsage] = useState(false);
+  const [usageErrorMessage, setUsageErrorMessage] = useState<string | null>(null);
   const [initialKps, setInitialKps] = useState<Keypoint[]>([]);
   const [initialEditorState, setInitialEditorState] = useState<PoseEditorState | null>(null);
   const [progress, setProgress] = useState(0);
@@ -276,6 +296,13 @@ const AppContent: React.FC = () => {
     setFinalImage(null);
     setLineArtImage(null);
     setRenderErrorMessage(null);
+    setRenderModels(null);
+    setSelectedModel(null);
+    setIsLoadingModels(false);
+    setModelErrorMessage(null);
+    setRenderUsage(null);
+    setIsLoadingUsage(false);
+    setUsageErrorMessage(null);
     setInitialKps([]);
     setInitialEditorState(null);
     setProgress(0);
@@ -350,6 +377,88 @@ const AppContent: React.FC = () => {
     activeRenderJobRef.current = null;
   }, []);
 
+  const loadRenderModels = React.useCallback(async (sid: string) => {
+    setIsLoadingModels(true);
+    setModelErrorMessage(null);
+
+    try {
+      const catalog = await renderApi.getModels(sid);
+      setRenderModels(catalog);
+      setSelectedModel((current) => selectCatalogModel(catalog, current));
+    } catch (error) {
+      console.error('[App] Failed to load render models:', error);
+      setRenderModels(null);
+      setSelectedModel(null);
+      setModelErrorMessage(getErrorMessage(error, '렌더링 모델 목록을 불러오지 못했습니다. 다시 시도해 주세요.'));
+    } finally {
+      setIsLoadingModels(false);
+    }
+  }, []);
+
+  const loadRenderUsage = React.useCallback(async (sid: string) => {
+    setIsLoadingUsage(true);
+    setUsageErrorMessage(null);
+
+    try {
+      const usage = await renderApi.getUsage(sid);
+      setRenderUsage(usage);
+      return usage;
+    } catch (error) {
+      console.error('[App] Failed to load render usage:', error);
+      setRenderUsage(null);
+      setUsageErrorMessage(getErrorMessage(error, '렌더링 사용량을 불러오지 못했습니다. 다시 시도해 주세요.'));
+      return null;
+    } finally {
+      setIsLoadingUsage(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (!sessionId || !isLoggedIn) {
+      setRenderModels(null);
+      setSelectedModel(null);
+      setModelErrorMessage(null);
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoadingModels(true);
+    setRenderModels(null);
+    setSelectedModel(null);
+    setModelErrorMessage(null);
+
+    renderApi.getModels(sessionId)
+      .then((catalog) => {
+        if (cancelled) return;
+        setRenderModels(catalog);
+        setSelectedModel((current) => selectCatalogModel(catalog, current));
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.error('[App] Failed to load render models:', error);
+        setRenderModels(null);
+        setSelectedModel(null);
+        setModelErrorMessage(getErrorMessage(error, '렌더링 모델 목록을 불러오지 못했습니다. 다시 시도해 주세요.'));
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingModels(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isLoggedIn, sessionId]);
+
+  React.useEffect(() => {
+    if (!sessionId || !isLoggedIn) {
+      setRenderUsage(null);
+      setUsageErrorMessage(null);
+      return;
+    }
+
+    void loadRenderUsage(sessionId);
+  }, [isLoggedIn, loadRenderUsage, sessionId]);
+
   const pollRenderStatus = React.useCallback((sid: string, jid: string, startedAt = Date.now()) => {
     stopRenderPolling();
     activeRenderJobRef.current = { sessionId: sid, jobId: jid, startedAt };
@@ -377,10 +486,17 @@ const AppContent: React.FC = () => {
           sessionId: sid,
           jobId: jid,
           status: res.status,
-          progress: res.progress,
         });
 
         if (res.status === 'completed') {
+          if (!res.output_image) {
+            clearLastRenderJobId(sid);
+            setProgress(-1);
+            setRenderErrorMessage('렌더링은 완료되었지만 결과 이미지를 받지 못했습니다. 다시 시도해 주세요.');
+            setStatus('failed');
+            stopRenderPolling();
+            return;
+          }
           setFinalImage(resolveAssetUrl(res.output_image));
           setProgress(100);
           setStatus('completed');
@@ -389,7 +505,7 @@ const AppContent: React.FC = () => {
           setProgress(-1);
           clearLastRenderJobId(sid);
           console.warn('[App] Render quota exceeded:', res);
-          setRenderErrorMessage(getRenderFailureMessage(res, '렌더링 quota를 초과했습니다. 잠시 후 다시 시도해 주세요.'));
+          setRenderErrorMessage('무료 이미지 생성 공통 한도에 도달했거나 현재 제공자가 혼잡합니다. 잠시 후 또는 한도 갱신 후 다시 시도해 주세요.');
           setStatus('failed');
           stopRenderPolling();
         } else if (res.status === 'failed') {
@@ -401,7 +517,11 @@ const AppContent: React.FC = () => {
           stopRenderPolling();
         } else {
           setStatus('rendering');
-          setProgress(res.progress || 0);
+          setProgress((current) => estimateRenderProgress(
+            res.status === 'running' ? 'running' : 'pending',
+            Date.now() - activeJob.startedAt,
+            current,
+          ));
         }
       } catch (err) {
         console.error('[App] Failed to poll render job status:', err);
@@ -446,7 +566,7 @@ const AppContent: React.FC = () => {
         const pose = await poseApi.getCurrent(session.id);
         console.log('[App] Current Pose Data:', pose);
         applyLoadedPose(pose as { keypoints?: Keypoint[] });
-      } catch (err) {
+      } catch {
         console.warn('[App] No current pose found, checking status...');
         try {
           const poseStatus = await poseApi.getStatus(session.id);
@@ -487,17 +607,23 @@ const AppContent: React.FC = () => {
             sessionId: session.id,
             jobId: lastRenderJob.jobId,
             status: res.status,
-            progress: res.progress,
           });
           if (res.status === 'completed') {
-            setFinalImage(resolveAssetUrl(res.output_image));
-            setProgress(100);
-            setStatus('completed');
+            if (res.output_image) {
+              setFinalImage(resolveAssetUrl(res.output_image));
+              setProgress(100);
+              setStatus('completed');
+            } else {
+              clearLastRenderJobId(session.id);
+              setProgress(-1);
+              setRenderErrorMessage('렌더링은 완료되었지만 결과 이미지를 받지 못했습니다. 다시 시도해 주세요.');
+              setStatus('failed');
+            }
           } else if (res.status === 'quota_exceeded') {
             setProgress(-1);
             clearLastRenderJobId(session.id);
             console.warn('[App] Render quota exceeded while restoring job:', res);
-            setRenderErrorMessage(getRenderFailureMessage(res, '렌더링 쿼터를 초과했습니다. 잠시 후 다시 시도해 주세요.'));
+            setRenderErrorMessage('무료 이미지 생성 공통 한도에 도달했거나 현재 제공자가 혼잡합니다. 잠시 후 또는 한도 갱신 후 다시 시도해 주세요.');
             setStatus('failed');
           } else if (res.status === 'failed') {
             setProgress(-1);
@@ -507,7 +633,7 @@ const AppContent: React.FC = () => {
             setStatus('failed');
           } else {
             setStatus('rendering');
-            setProgress(res.progress || 0);
+            setProgress(0);
             pollRenderStatus(session.id, lastRenderJob.jobId, lastRenderJob.startedAt);
           }
         } catch (err) {
@@ -632,8 +758,10 @@ const AppContent: React.FC = () => {
       
       subscribeToSessionEvents(session.id);
       startStatusPolling(session.id);
-    } catch (err) { 
-      setStatus('idle'); 
+    } catch (error) {
+      console.error('[App] Failed to create session:', error);
+      setRenderErrorMessage(getErrorMessage(error, '이미지 업로드에 실패했습니다. 다시 시도해 주세요.'));
+      setStatus('idle');
     }
   };
 
@@ -668,8 +796,9 @@ const AppContent: React.FC = () => {
           console.log('[SSE] Completed. Fetching final pose...');
 
           const pose = await poseApi.getById(data.pose_id);
+          const legacyPose = pose as typeof pose & { points?: Keypoint[] };
           applyLoadedPose({
-            keypoints: (pose.keypoints || (pose as any).points || []) as Keypoint[],
+            keypoints: pose.keypoints || legacyPose.points || [],
             editorState: pose.editorState ?? null,
           });
           stopStatusPolling();
@@ -715,7 +844,7 @@ const AppContent: React.FC = () => {
   }, []);
 
   const handleRender = async () => {
-    if (!sessionId || !isLoggedIn) return;
+    if (!sessionId || !isLoggedIn || !selectedModel) return;
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
       eventSourceRef.current = null;
@@ -724,7 +853,7 @@ const AppContent: React.FC = () => {
     stopRenderPolling();
     
     // UI 상태를 즉시 'rendering'으로 전환하여 버튼 비활성화 및 로딩 표시
-    setProgress(0);
+    setProgress(5);
     setStatus('rendering');
     setRenderErrorMessage(null);
     
@@ -735,19 +864,39 @@ const AppContent: React.FC = () => {
 
       const poseProjectionImage = await canvasEditorRef.current?.capturePoseProjection();
       if (!poseProjectionImage) {
-        console.warn('[App] Pose projection capture was unavailable; requesting render without projection image.');
+        throw new Error('현재 마네킹 포즈 이미지를 캡처하지 못했습니다. 잠시 후 다시 시도해 주세요.');
       }
+      console.info('[App] Pose projection captured:', {
+        mimeType: poseProjectionImage.match(/^data:([^;,]+)/)?.[1] ?? 'unknown',
+        characters: poseProjectionImage.length,
+      });
       
       // Step 2: 렌더링(이미지 생성) 요청
       console.log('[App] Requesting render with prompt:', prompt);
-      const job = await renderApi.request(sessionId, prompt || "", poseProjectionImage || undefined);
-      console.info('[App] Render job created:', { sessionId, jobId: job.job_id, status: job.status });
+      const job = await renderApi.request(sessionId, {
+        model: selectedModel,
+        prompt: prompt || '',
+        poseProjectionImage: poseProjectionImage || undefined,
+      });
+      console.info('[App] Render job created:', {
+        sessionId,
+        jobId: job.job_id,
+        status: job.status,
+        model: job.model,
+      });
+      await loadRenderUsage(sessionId);
       setLastRenderJob(sessionId, job.job_id);
       pollRenderStatus(sessionId, job.job_id);
     } catch (err) {
       console.error('[App] Unified action failed:', err);
       clearLastRenderJobId(sessionId);
-      setRenderErrorMessage(getErrorMessage(err, '렌더 요청에 실패했습니다. 다시 시도해 주세요.'));
+      const httpStatus = (err as { response?: { status?: number } }).response?.status;
+      if (httpStatus === 429) {
+        await loadRenderUsage(sessionId);
+        setRenderErrorMessage('오늘 사용할 수 있는 이미지 생성을 모두 사용했어요. UTC 00:00에 다시 사용할 수 있습니다.');
+      } else {
+        setRenderErrorMessage(getErrorMessage(err, '렌더 요청에 실패했습니다. 다시 시도해 주세요.'));
+      }
       setStatus('failed');
     }
   };
@@ -756,7 +905,7 @@ const AppContent: React.FC = () => {
   if (isAuthLoading) return <div className="h-screen w-full bg-black flex items-center justify-center text-zinc-500 font-mono tracking-widest uppercase">Initializing...</div>;
   if (!isLoggedIn) return <LoginView onLogin={login} />;
 
-  const shouldShowPromptBar = Boolean(sessionId) && status !== 'idle';
+  const shouldShowPromptBar = true;
 
   return (
     <div className="flex h-screen w-full bg-black text-white overflow-hidden font-sans selection:bg-white/10">
@@ -764,7 +913,6 @@ const AppContent: React.FC = () => {
         status={status}
         progress={progress}
         sessionId={sessionId}
-        onFileSelect={startSession}
         finalImage={finalImage}
         user={user}
         onLogout={logout}
@@ -811,6 +959,28 @@ const AppContent: React.FC = () => {
             onRender={handleRender}
             isLoading={status === 'rendering' || status === 'analyzing'}
             errorMessage={renderErrorMessage}
+            statusMessage={status === 'rendering'
+              ? `${renderModels?.models.find((model) => model.id === selectedModel)?.name ?? '선택한 모델'}로 이미지를 생성하고 있습니다.`
+              : null}
+            onFileSelect={startSession}
+            models={renderModels?.models ?? []}
+            usage={renderUsage}
+            isLoadingUsage={isLoadingUsage}
+            usageErrorMessage={usageErrorMessage}
+            selectedModel={selectedModel}
+            onModelChange={setSelectedModel}
+            isLoadingModels={isLoadingModels}
+            modelErrorMessage={modelErrorMessage}
+            onRetryModels={() => sessionId && void loadRenderModels(sessionId)}
+            onRetryUsage={() => sessionId && void loadRenderUsage(sessionId)}
+            isRenderDisabled={
+              !selectedModel
+              || isLoadingModels
+              || isLoadingUsage
+              || Boolean(modelErrorMessage)
+              || Boolean(usageErrorMessage)
+              || isRenderUsageExhausted(renderUsage?.daily ?? null)
+            }
           />
         )}
       </main>

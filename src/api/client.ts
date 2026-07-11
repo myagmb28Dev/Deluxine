@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { auth } from '../lib/firebase';
 import type {
+  CreateRenderRequest,
   CreateRenderResponse,
   MeResponse,
   PoseDto,
@@ -8,6 +9,8 @@ import type {
   PoseTopologyResponse,
   PoseStatusResponse,
   RenderJobResponse,
+  RenderModelListResponse,
+  RenderUsageResponse,
   SessionDto,
   SessionPresignRequest,
   SessionPresignResponse,
@@ -114,8 +117,12 @@ export const poseApi = {
 };
 
 export const renderApi = {
-  request: (sessionId: string, prompt: string, poseProjectionImage?: string) =>
-    api.post<CreateRenderResponse>(`/sessions/${sessionId}/render`, { prompt, poseProjectionImage }).then(res => res.data),
+  getModels: (sessionId: string) =>
+    api.get<RenderModelListResponse>(`/sessions/${sessionId}/render/models`).then(res => res.data),
+  getUsage: (sessionId: string) =>
+    api.get<RenderUsageResponse>(`/sessions/${sessionId}/render/usage`).then(res => res.data),
+  request: (sessionId: string, request: CreateRenderRequest) =>
+    api.post<CreateRenderResponse>(`/sessions/${sessionId}/render`, request).then(res => res.data),
   getJobStatus: (sessionId: string, jobId: string) => api.get<RenderJobResponse>(`/sessions/${sessionId}/render/jobs/${jobId}`).then(res => res.data),
 };
 

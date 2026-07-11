@@ -58,6 +58,7 @@ const saveCameraState = (sessionId: string, state: StoredCameraState) => {
 
 type TransformMode = 'translate' | 'rotate' | 'scale';
 type TransformTarget = 'whole' | 'bone';
+type EditorModeShortcut = 'w' | 'e' | 'r' | '1';
 
 export type CanvasEditorHandle = {
   capturePoseProjection: () => Promise<string | null>;
@@ -451,8 +452,8 @@ const RiggedMannequin = ({
   captureMode,
   transformMode,
   transformTarget,
+  transformActive,
   selectedBoneId,
-  shiftBoneDragEnabled,
   onSelectBone,
   onSetDragging,
   onUpdateKeypoint,
@@ -466,8 +467,8 @@ const RiggedMannequin = ({
   captureMode: boolean;
   transformMode: TransformMode;
   transformTarget: TransformTarget;
+  transformActive: boolean;
   selectedBoneId: string | null;
-  shiftBoneDragEnabled: boolean;
   onSelectBone: (boneId: string) => void;
   onSetDragging: (dragging: boolean) => void;
   onUpdateKeypoint: (index: number, newPos: THREE.Vector3, isFinal: boolean) => void;
@@ -476,21 +477,9 @@ const RiggedMannequin = ({
   onCanvasSelectWhole: () => void;
 }) => {
   const gltf = useGLTF(MODEL_URL);
-  const { camera } = useThree();
   const scene = useMemo(() => clone(gltf.scene) as THREE.Group, [gltf.scene]);
   const [pivotObject, setPivotObject] = useState<THREE.Object3D | null>(null);
   const [hoveredBoneId, setHoveredBoneId] = useState<string | null>(null);
-  const boneDragRef = useRef<{
-    active: boolean;
-    pointerId: number | null;
-    lastX: number;
-    lastY: number;
-  }>({
-    active: false,
-    pointerId: null,
-    lastX: 0,
-    lastY: 0,
-  });
   const appliedEditorStateSignatureRef = useRef<string | null>(null);
 
   const guideColors = useMemo(() => buildGuideColorMap(guide), [guide]);
@@ -606,10 +595,10 @@ const RiggedMannequin = ({
 
   const selectedBoneObject = selectedBoneId ? boneById.get(selectedBoneId) ?? null : null;
   const effectiveMode: TransformMode = transformTarget === 'bone' ? 'rotate' : transformMode;
-  const selectedObject = transformTarget === 'whole' ? pivotObject : selectedBoneObject;
-  const showBoneHandles = rigState.canEditBones && transformTarget === 'bone';
-  const isShiftBoneDragMode = shiftBoneDragEnabled && transformTarget === 'bone' && !!selectedBoneObject;
-
+  const selectedObject = transformActive
+    ? (transformTarget === 'whole' ? pivotObject : selectedBoneObject)
+    : null;
+  const showBoneHandles = transformActive && rigState.canEditBones && transformTarget === 'bone';
   const keypointIndexByName = useMemo(() => {
     const map = new Map<string, number>();
     keypoints.forEach((kp, index) => map.set(kp.name, index));
@@ -655,42 +644,6 @@ const RiggedMannequin = ({
     };
   }, [boneOptions, pivotObject, scene]);
 
-  const applyDragRotateToBone = useCallback((dx: number, dy: number) => {
-    if (!selectedBoneObject) return;
-    const yaw = -dx * 0.01;
-    const pitch = -dy * 0.01;
-    const worldUp = new THREE.Vector3(0, 1, 0);
-    const cameraDir = new THREE.Vector3();
-    const cameraRight = new THREE.Vector3();
-
-    camera.getWorldDirection(cameraDir);
-    cameraRight.crossVectors(cameraDir, camera.up).normalize();
-
-    selectedBoneObject.rotateOnWorldAxis(worldUp, yaw);
-    selectedBoneObject.rotateOnWorldAxis(cameraRight, pitch);
-
-    scene.updateMatrixWorld(true);
-    syncKeypointsFromBones(false);
-  }, [camera, scene, selectedBoneObject, syncKeypointsFromBones]);
-
-  const finishShiftBoneDrag = useCallback(() => {
-    if (!boneDragRef.current.active) return;
-    boneDragRef.current.active = false;
-    boneDragRef.current.pointerId = null;
-    onSetDragging(false);
-    const editorState = captureEditorState();
-    if (editorState) {
-      onEditorStateChange?.(editorState, true);
-    }
-    syncKeypointsFromBones(true);
-  }, [captureEditorState, onEditorStateChange, onSetDragging, syncKeypointsFromBones]);
-
-  useEffect(() => {
-    if (!isShiftBoneDragMode) {
-      finishShiftBoneDrag();
-    }
-  }, [finishShiftBoneDrag, isShiftBoneDragMode]);
-
   const initialEditorStateSignature = useMemo(
     () => (initialEditorState ? JSON.stringify(initialEditorState) : null),
     [initialEditorState],
@@ -730,39 +683,7 @@ const RiggedMannequin = ({
         ref={(object) => {
           setPivotObject(object);
         }}
-        onPointerDown={(event) => {
-          if (!isShiftBoneDragMode) return;
-          event.stopPropagation();
-          boneDragRef.current.active = true;
-          boneDragRef.current.pointerId = event.pointerId;
-          boneDragRef.current.lastX = event.clientX;
-          boneDragRef.current.lastY = event.clientY;
-          onSetDragging(true);
-        }}
-        onPointerMove={(event) => {
-          if (!isShiftBoneDragMode) return;
-          if (!boneDragRef.current.active) return;
-          if (boneDragRef.current.pointerId !== event.pointerId) return;
-
-          event.stopPropagation();
-          const dx = event.clientX - boneDragRef.current.lastX;
-          const dy = event.clientY - boneDragRef.current.lastY;
-          boneDragRef.current.lastX = event.clientX;
-          boneDragRef.current.lastY = event.clientY;
-
-          applyDragRotateToBone(dx, dy);
-        }}
-        onPointerUp={(event) => {
-          if (!boneDragRef.current.active) return;
-          if (boneDragRef.current.pointerId !== event.pointerId) return;
-          event.stopPropagation();
-          finishShiftBoneDrag();
-        }}
-        onPointerLeave={() => {
-          finishShiftBoneDrag();
-        }}
         onClick={(event) => {
-          if (isShiftBoneDragMode) return;
           event.stopPropagation();
           onCanvasSelectWhole();
         }}
@@ -793,7 +714,7 @@ const RiggedMannequin = ({
           />
         ))}
 
-      {selectedObject && !captureMode && !isShiftBoneDragMode && (
+      {selectedObject && !captureMode && (
         <TransformControls
           object={selectedObject}
           mode={effectiveMode}
@@ -840,9 +761,11 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
   const [dragging, setDragging] = useState(false);
   const [transformTarget, setTransformTarget] = useState<TransformTarget>('whole');
   const [transformMode, setTransformMode] = useState<TransformMode>('translate');
+  const [transformActive, setTransformActive] = useState(true);
+  const [activeModeShortcut, setActiveModeShortcut] = useState<EditorModeShortcut>('w');
   const [selectedBoneId, setSelectedBoneId] = useState<string | null>(null);
-  const [showShortcuts, setShowShortcuts] = useState(true);
-  const [isShiftPressed, setIsShiftPressed] = useState(false);
+  const [showGuide, setShowGuide] = useState(false);
+  const [isControlPressed, setIsControlPressed] = useState(false);
   const [captureMode, setCaptureMode] = useState(false);
   const [captureRequestId, setCaptureRequestId] = useState(0);
   const [cameraZoom, setCameraZoom] = useState(DEFAULT_CAMERA_ZOOM);
@@ -862,7 +785,6 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
   const handleCameraZoomChange = useCallback((zoom: number) => {
     setCameraZoom((current) => (Math.abs(current - zoom) < 0.01 ? current : zoom));
   }, []);
-
   const handleCaptureComplete = useCallback((imageData: string | null) => {
     if (captureTimeoutRef.current) {
       window.clearTimeout(captureTimeoutRef.current);
@@ -904,27 +826,44 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
 
   const enterBoneMode = useCallback(() => {
     if (!rigState.canEditBones) return;
+    if (transformActive && activeModeShortcut === '1') {
+      setTransformActive(false);
+      setSelectedBoneId(null);
+      return;
+    }
+    setTransformActive(true);
     setTransformTarget('bone');
     setTransformMode('rotate');
+    setActiveModeShortcut('1');
     setSelectedBoneId((current) => current ?? rigState.firstBoneId ?? null);
-  }, [rigState.canEditBones, rigState.firstBoneId]);
+  }, [activeModeShortcut, rigState.canEditBones, rigState.firstBoneId, transformActive]);
 
-  const enterWholeMode = useCallback((mode: TransformMode = 'translate') => {
+  const enterWholeMode = useCallback((mode: TransformMode = 'translate', shortcut: EditorModeShortcut = 'w') => {
+    setTransformActive(true);
     setTransformTarget('whole');
     setTransformMode(mode);
+    setActiveModeShortcut(shortcut);
     setSelectedBoneId(null);
   }, []);
 
+  const toggleWholeMode = useCallback((mode: TransformMode, shortcut: EditorModeShortcut) => {
+    if (transformActive && activeModeShortcut === shortcut) {
+      setTransformActive(false);
+      return;
+    }
+    enterWholeMode(mode, shortcut);
+  }, [activeModeShortcut, enterWholeMode, transformActive]);
+
   useEffect(() => {
-    if (rigState.canEditBones && transformTarget === 'bone' && !selectedBoneId) {
+    if (transformActive && rigState.canEditBones && transformTarget === 'bone' && !selectedBoneId) {
       setSelectedBoneId(rigState.firstBoneId ?? null);
     }
-  }, [rigState.canEditBones, rigState.firstBoneId, selectedBoneId, transformTarget]);
+  }, [rigState.canEditBones, rigState.firstBoneId, selectedBoneId, transformActive, transformTarget]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Shift') {
-        setIsShiftPressed(true);
+      if (event.key === 'Control') {
+        setIsControlPressed(true);
       }
       const target = event.target as HTMLElement | null;
       const tagName = target?.tagName?.toLowerCase();
@@ -935,32 +874,23 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
 
       switch (key) {
         case 'w':
-          if (activeTarget === 'whole') {
-            setTransformMode('translate');
-          }
+          toggleWholeMode('translate', 'w');
           break;
         case 'e':
-          if (activeTarget === 'whole') {
-            setTransformMode('rotate');
-          }
+          toggleWholeMode('rotate', 'e');
           break;
         case 'r':
-          if (activeTarget === 'whole') {
-            setTransformMode('scale');
-          }
+          toggleWholeMode('scale', 'r');
           break;
         case '1':
           enterBoneMode();
           break;
-        case '2':
-          enterWholeMode('translate');
-          break;
         case 'escape':
+          setShowGuide(false);
           setSelectedBoneId(null);
           break;
         case 'h':
-        case '?':
-          setShowShortcuts((current) => !current);
+          setShowGuide((current) => !current);
           break;
         default:
           handled = false;
@@ -972,24 +902,50 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
     };
 
     const onKeyUp = (event: KeyboardEvent) => {
-      if (event.key === 'Shift') {
-        setIsShiftPressed(false);
+      if (event.key === 'Control') {
+        setIsControlPressed(false);
       }
+    };
+
+    const onBlur = () => {
+      setIsControlPressed(false);
     };
 
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onBlur);
     return () => {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', onBlur);
     };
-  }, [activeTarget, enterBoneMode, enterWholeMode]);
+  }, [enterBoneMode, toggleWholeMode]);
 
-  const statusText = rigState.canEditBones
+  useEffect(() => {
+    if (!showGuide) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [showGuide]);
+
+  const statusText = !transformActive
+    ? '편집 도구 꺼짐'
+    : rigState.canEditBones
     ? selectedBoneId
       ? `Bone: ${selectedBoneId}`
       : 'Bone mode: select a visible joint handle'
     : rigState.message || 'Whole mannequin transform';
+
+  const activeModeLabel = !transformActive
+    ? null
+    : ({
+        w: '이동 모드 활성화',
+        e: '회전 모드 활성화',
+        r: '크기 조절 모드 활성화',
+        '1': '본 모드 활성화',
+      } satisfies Record<EditorModeShortcut, string>)[activeModeShortcut];
 
   return (
     <div className="w-[600px] h-[800px] bg-gradient-to-b from-[#09090e] to-[#040406] rounded-2xl overflow-hidden relative shadow-[0_15px_40px_rgba(0,0,0,0.6)] border border-white/5">
@@ -1013,22 +969,20 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
       <div className="absolute bottom-3 left-3 w-3 h-3 border-b-2 border-l-2 border-indigo-500/30 pointer-events-none" />
       <div className="absolute bottom-3 right-3 w-3 h-3 border-b-2 border-r-2 border-indigo-500/30 pointer-events-none" />
 
-      <button
-        onClick={() => setShowShortcuts((current) => !current)}
-        className="absolute right-4 top-4 z-20 rounded-lg border border-white/5 bg-zinc-950/60 hover:bg-zinc-900/60 hover:border-white/10 px-3 py-1.5 text-[9px] font-bold uppercase tracking-wider text-zinc-300 transition-all backdrop-blur-md cursor-pointer active:scale-95"
-      >
-        Shortcuts
-      </button>
+      <div className="absolute right-4 top-4 z-20">
+        <button
+          type="button"
+          onClick={() => setShowGuide((current) => !current)}
+          className="rounded-lg border border-indigo-400/20 bg-indigo-500/10 px-3 py-1.5 text-[9px] font-bold text-indigo-200 transition-all hover:border-indigo-400/40 hover:bg-indigo-500/20 active:scale-95"
+        >
+          가이드
+        </button>
+      </div>
 
-      {rigState.canEditBones && activeTarget === 'bone' && (
-        <div className="absolute left-4 top-14 z-20 rounded-xl border border-indigo-500/20 bg-indigo-500/10 px-4 py-2.5 text-[11px] font-medium text-indigo-200 backdrop-blur-md shadow-[0_4px_20px_rgba(99,102,241,0.06)] animate-pulse">
-          Bone mode is active. Selected joint is highlighted.
-        </div>
-      )}
-
-      {!captureMode && (
-        <div className="absolute left-4 top-4 z-20 rounded-lg border border-white/5 bg-zinc-950/60 px-3 py-1.5 text-[9px] font-bold uppercase tracking-wider text-zinc-400 backdrop-blur-md select-none">
-          View: right-drag rotate · wheel zoom
+      {activeModeLabel && (
+        <div className="absolute left-4 top-4 z-20 flex items-center gap-2 text-[11px] font-medium text-indigo-200">
+          <span>{activeModeLabel}</span>
+          <span className="h-1.5 w-1.5 rounded-full bg-violet-400 animate-pulse" />
         </div>
       )}
 
@@ -1054,8 +1008,8 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
             captureMode={captureMode}
             transformMode={transformMode}
             transformTarget={activeTarget}
+            transformActive={transformActive}
             selectedBoneId={selectedBoneId}
-            shiftBoneDragEnabled={isShiftPressed}
             onSelectBone={(boneId) => {
               setSelectedBoneId(boneId);
             }}
@@ -1093,7 +1047,7 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
           makeDefault
           enabled={!dragging && !captureMode}
           enableRotate
-          enableZoom
+          enableZoom={isControlPressed}
           enablePan={false}
           mouseButtons={{
             LEFT: THREE.MOUSE.PAN,
@@ -1103,33 +1057,96 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
         />
       </Canvas>
 
-      {showShortcuts && (
-        <div className="absolute right-4 top-14 z-20 w-[240px] rounded-xl border border-white/5 bg-[#09090e]/90 p-4 text-[10px] text-zinc-300 backdrop-blur-xl shadow-2xl animate-in fade-in zoom-in-95 duration-200">
-          <div className="mb-3 text-[9px] font-bold uppercase tracking-[0.2em] text-indigo-400">Controls</div>
-          <div className="grid grid-cols-[45px_1fr] gap-x-2 gap-y-2 items-center">
-            <span className="font-mono font-bold text-center text-white bg-white/5 border border-white/5 py-0.5 px-1.5 rounded-md">W</span>
-            <span className="text-zinc-400">Move mannequin</span>
-            
-            <span className="font-mono font-bold text-center text-white bg-white/5 border border-white/5 py-0.5 px-1.5 rounded-md">E</span>
-            <span className="text-zinc-400">Rotate mannequin</span>
-            
-            <span className="font-mono font-bold text-center text-white bg-white/5 border border-white/5 py-0.5 px-1.5 rounded-md">R</span>
-            <span className="text-zinc-400">Scale mannequin</span>
-            
-            <span className="font-mono font-bold text-center text-white bg-white/5 border border-white/5 py-0.5 px-1.5 rounded-md">1</span>
-            <span className="text-zinc-400">Bone rotation mode</span>
-            
-            <span className="font-mono font-bold text-center text-white bg-white/5 border border-white/5 py-0.5 px-1.5 rounded-md">2</span>
-            <span className="text-zinc-400">Whole mannequin mode</span>
-            
-            <span className="font-mono font-bold text-center text-white bg-white/5 border border-white/5 py-0.5 px-1 rounded-md text-[9px]">Shift</span>
-            <span className="text-zinc-400">Bone twist (Hold & Drag)</span>
-            
-            <span className="font-mono font-bold text-center text-white bg-white/5 border border-white/5 py-0.5 px-1 rounded-md text-[9px]">Esc</span>
-            <span className="text-zinc-400">Clear joint selection</span>
-            
-            <span className="font-mono font-bold text-center text-white bg-white/5 border border-white/5 py-0.5 px-1.5 rounded-md">H</span>
-            <span className="text-zinc-400">Toggle shortcuts guide</span>
+      {showGuide && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-6 backdrop-blur-sm"
+          onMouseDown={() => setShowGuide(false)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="editor-guide-title"
+            className="flex max-h-[calc(100vh-48px)] w-full max-w-[520px] flex-col overflow-hidden rounded-lg border border-indigo-400/25 bg-[#09070f] p-5 shadow-[0_0_34px_rgba(99,102,241,0.24),0_24px_60px_rgba(0,0,0,0.7)]"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-white/10 pb-4">
+              <div>
+                <h2 id="editor-guide-title" className="text-base font-bold text-white">DELUXINE 기능 가이드</h2>
+                <p className="mt-1 text-[11px] text-zinc-500">이미지 추가부터 포즈 편집과 렌더링까지</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowGuide(false)}
+                aria-label="가이드 닫기"
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-lg text-zinc-400 hover:bg-white/10 hover:text-white"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain pt-4 pr-2 text-[11px] leading-4 text-zinc-400">
+              <section>
+                <h3 className="mb-2 text-xs font-semibold text-indigo-300">단축키</h3>
+                <div className="grid grid-cols-[48px_1fr_48px_1fr] gap-x-3 gap-y-1.5">
+                  <kbd className="text-center text-zinc-100">W</kbd><span>마네킹 이동</span>
+                  <kbd className="text-center text-zinc-100">E</kbd><span>마네킹 회전</span>
+                  <kbd className="text-center text-zinc-100">R</kbd><span>마네킹 크기 조절</span>
+                  <kbd className="text-center text-zinc-100">1</kbd><span>본 회전 모드</span>
+                  <kbd className="text-center text-zinc-100">Esc</kbd><span>선택 해제 / 닫기</span>
+                  <kbd className="text-center text-zinc-100">H</kbd><span>가이드 열기 / 닫기</span>
+                </div>
+              </section>
+
+              <section>
+                <h3 className="mb-2 text-xs font-semibold text-indigo-300">작업 바</h3>
+                <dl className="grid grid-cols-[100px_1fr] gap-x-4 gap-y-1.5">
+                  <dt className="font-medium text-zinc-200">이미지 추가 (+)</dt>
+                  <dd>새 이미지 업로드</dd>
+                  <dt className="font-medium text-zinc-200">변경 사항 입력</dt>
+                  <dd>선택 입력 프롬프트</dd>
+                  <dt className="font-medium text-zinc-200">모델 선택</dt>
+                  <dd>렌더 모델 변경</dd>
+                  <dt className="font-medium text-zinc-200">사용량 게이지</dt>
+                  <dd>오늘 사용 / 한도</dd>
+                  <dt className="font-medium text-zinc-200">렌더 화살표</dt>
+                  <dd>이미지 생성 시작</dd>
+                </dl>
+              </section>
+
+              <section>
+                <h3 className="mb-2 text-xs font-semibold text-indigo-300">편집</h3>
+                <dl className="grid grid-cols-[100px_1fr] gap-x-4 gap-y-1.5">
+                  <dt className="font-medium text-zinc-200">전체 마네킹</dt>
+                  <dd>W 이동 · E 회전 · R 크기</dd>
+                  <dt className="font-medium text-zinc-200">본 모드</dt>
+                  <dd>관절 선택 후 회전</dd>
+                  <dt className="font-medium text-zinc-200">토글 종료</dt>
+                  <dd>같은 단축키 다시 누르기</dd>
+                </dl>
+              </section>
+
+              <section>
+                <h3 className="mb-2 text-xs font-semibold text-indigo-300">카메라 · 마우스</h3>
+                <dl className="grid grid-cols-[100px_1fr] gap-x-4 gap-y-1.5">
+                  <dt className="font-medium text-zinc-200">우클릭 드래그</dt>
+                  <dd>카메라 회전</dd>
+                  <dt className="font-medium text-zinc-200">Ctrl + 휠</dt>
+                  <dd>카메라 줌</dd>
+                  <dt className="font-medium text-zinc-200">일반 클릭</dt>
+                  <dd>마네킹 / 관절 선택</dd>
+                </dl>
+              </section>
+
+              <section>
+                <h3 className="mb-2 text-xs font-semibold text-indigo-300">세션</h3>
+                <dl className="grid grid-cols-[100px_1fr] gap-x-4 gap-y-1.5">
+                  <dt className="font-medium text-zinc-200">새 세션</dt>
+                  <dd>새 작업 시작</dd>
+                  <dt className="font-medium text-zinc-200">세션 목록</dt>
+                  <dd>이전 작업 복원</dd>
+                </dl>
+              </section>
+            </div>
           </div>
         </div>
       )}

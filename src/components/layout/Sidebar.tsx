@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Upload, Loader2, LogOut, User, Menu, FolderPlus } from 'lucide-react';
+import { LogOut, User, Menu, FolderPlus } from 'lucide-react';
 import type { PipelineStatus } from '../../types';
 import type { SessionListItem } from '../../types/api';
 
@@ -24,9 +24,8 @@ interface SidebarProps {
   status: PipelineStatus;
   progress: number;
   sessionId: string | null;
-  onFileSelect: (file: File) => void;
   finalImage?: string | null;
-  user?: any;
+  user?: { email?: string | null } | null;
   onLogout: () => void;
   recentSessions?: SessionListItem[];
   onSessionSelect?: (id: string) => void;
@@ -39,7 +38,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
   status,
   progress,
   sessionId,
-  onFileSelect,
   finalImage,
   user,
   onLogout,
@@ -49,7 +47,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onRenameSession,
   onDeleteSession,
 }) => {
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const [isOpen, setIsOpen] = useState(true);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
@@ -77,12 +74,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
       window.removeEventListener('mousedown', closeMenu);
     };
   }, [menuState]);
-
-  const handleUploadClick = () => { fileInputRef.current?.click(); };
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) onFileSelect(file);
-  };
 
   const startRenameSession = (session: SessionListItem) => {
     setEditingSessionId(session.id);
@@ -144,23 +135,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       <div className="flex-1 overflow-y-auto p-4 space-y-6">
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
+          <div>
             <button
               onClick={onNewSession}
-              className="h-12 rounded-xl border border-white/5 bg-white/[0.02] px-4 flex items-center justify-center gap-2 text-xs font-semibold text-zinc-300 hover:border-white/10 hover:bg-white/[0.05] hover:text-white transition-all active:scale-95"
+              className="flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-white/5 bg-white/[0.02] px-4 text-xs font-semibold text-zinc-300 transition-all hover:border-white/10 hover:bg-white/[0.05] hover:text-white active:scale-95"
             >
               <FolderPlus size={15} />
               <span>새 세션</span>
             </button>
-            <button
-              onClick={handleUploadClick}
-              disabled={status === 'analyzing' || status === 'rendering'}
-              className="h-12 rounded-xl text-xs font-bold bg-gradient-to-r from-indigo-500 to-purple-600 text-white px-4 flex items-center justify-center gap-2 hover:from-indigo-400 hover:to-purple-500 hover:shadow-[0_0_15px_rgba(99,102,241,0.3)] disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95"
-            >
-              {status === 'analyzing' ? <Loader2 className="animate-spin" size={15} /> : <Upload size={15} />}
-              <span>{(status === 'analyzing' || status === 'rendering') ? '처리 중' : '라인 업로드'}</span>
-            </button>
-            <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleFileChange} />
           </div>
 
           {/* 진행률 표시 바 */}
