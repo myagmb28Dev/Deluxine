@@ -3,9 +3,9 @@ import { readFileSync } from 'node:fs'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   plugins: [react(), tailwindcss()],
-  server: {
+  server: command === 'serve' ? {
     https: {
       cert: readFileSync('.cert/localhost.pem'),
       key: readFileSync('.cert/localhost.key'),
@@ -19,5 +19,5 @@ export default defineConfig({
       '/poses': 'http://localhost:3000',
       '/uploads': 'http://localhost:3000',
     },
-  },
-})
+  } : undefined,
+}))
