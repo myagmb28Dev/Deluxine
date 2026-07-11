@@ -1,6 +1,20 @@
 import { Pose } from '../../entities/pose.entity';
 import { RenderModel } from './render-model';
 
+export type RenderProgressPhase =
+  | 'queued'
+  | 'preparing'
+  | 'generating'
+  | 'uploading'
+  | 'completed'
+  | 'failed';
+
+export interface RenderProgressSnapshot {
+  progress: number;
+  phase: RenderProgressPhase;
+  message: string;
+}
+
 export type RenderPoseData = Pick<Pose, 'keypoints'> & Partial<Pose>;
 
 export interface RenderQueuePayload {

@@ -7,7 +7,11 @@ import { RenderJob } from '../../entities/render-job.entity';
 import { RedisKeys } from '../redis/redis.keys';
 import { RedisService } from '../redis/redis.service';
 import { R2Service } from '../r2/r2.service';
-import { CreateRenderJobInput, RenderQueuePayload } from './render-job.types';
+import {
+  CreateRenderJobInput,
+  RenderProgressSnapshot,
+  RenderQueuePayload,
+} from './render-job.types';
 import { ListRenderHistoryDto } from './dto/list-render-history.dto';
 import { DEFAULT_RENDER_MODEL } from './render-model';
 
@@ -49,6 +53,11 @@ export class RenderService {
 
     const saved = await this.renderJobRepository.save(job);
     await this.updateJobStatus(saved.id, 'pending');
+    await this.updateJobProgress(saved.id, {
+      progress: 5,
+      phase: 'queued',
+      message: '렌더링 작업이 대기열에 등록되었습니다.',
+    });
 
     this.logger.log(
       `Enqueuing render job ${saved.id} for session ${input.sessionId}`,
@@ -104,6 +113,20 @@ export class RenderService {
 
   async getJobStatus(jobId: string): Promise<string | null> {
     return this.redisService.get<string>(RedisKeys.renderJobStatus(jobId));
+  }
+
+  async updateJobProgress(jobId: string, snapshot: RenderProgressSnapshot) {
+    await this.redisService.set(
+      RedisKeys.renderJobProgress(jobId),
+      snapshot,
+      this.STATUS_TTL,
+    );
+  }
+
+  async getJobProgress(jobId: string) {
+    return this.redisService.get<RenderProgressSnapshot>(
+      RedisKeys.renderJobProgress(jobId),
+    );
   }
 
   async findJobById(jobId: string) {

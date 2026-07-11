@@ -138,6 +138,42 @@ describe('RenderProcessor usage refunds', () => {
     expect(
       renderUsageService.releaseUserRequestForFailedJob,
     ).not.toHaveBeenCalled();
+    expect(redisService.set).toHaveBeenCalledWith(
+      'render_job:job-1:progress',
+      {
+        progress: 15,
+        phase: 'preparing',
+        message: '렌더링 입력을 준비하고 있습니다.',
+      },
+      7200,
+    );
+    expect(redisService.set).toHaveBeenCalledWith(
+      'render_job:job-1:progress',
+      {
+        progress: 35,
+        phase: 'generating',
+        message: 'AI가 이미지를 생성하고 있습니다.',
+      },
+      7200,
+    );
+    expect(redisService.set).toHaveBeenCalledWith(
+      'render_job:job-1:progress',
+      {
+        progress: 90,
+        phase: 'uploading',
+        message: '생성된 이미지를 저장하고 있습니다.',
+      },
+      7200,
+    );
+    expect(redisService.set).toHaveBeenCalledWith(
+      'render_job:job-1:progress',
+      {
+        progress: 100,
+        phase: 'completed',
+        message: '이미지 생성이 완료되었습니다.',
+      },
+      7200,
+    );
   });
 
   function makeJob(attemptsMade: number) {

@@ -76,4 +76,27 @@ describe('RenderController usage reservation', () => {
       limit: 20,
     });
   });
+
+  it('includes server progress in a running render job response', async () => {
+    Object.assign(renderService, {
+      getJobStatus: jest.fn().mockResolvedValue('running'),
+      getJobProgress: jest.fn().mockResolvedValue({
+        progress: 35,
+        phase: 'generating',
+        message: 'AI가 이미지를 생성하고 있습니다.',
+      }),
+    });
+
+    await expect(controller.getJobStatus('job-1')).resolves.toEqual({
+      job_id: 'job-1',
+      status: 'running',
+      progress: 35,
+      phase: 'generating',
+      progress_message: 'AI가 이미지를 생성하고 있습니다.',
+      output_image: null,
+      model: null,
+      created_at: null,
+      updated_at: null,
+    });
+  });
 });

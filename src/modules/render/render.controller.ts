@@ -23,6 +23,7 @@ import {
 } from './render-model';
 import { RenderUsageService } from './render-usage.service';
 import { ListRenderHistoryDto } from './dto/list-render-history.dto';
+import { RenderProgressSnapshot } from './render-job.types';
 
 @ApiTags('render')
 @ApiBearerAuth()
@@ -122,6 +123,7 @@ export class RenderController {
   async getJobStatus(@Param('jobId') jobId: string) {
     // 1. 초고속 Redis 캐시 조회
     const statusFromCache = await this.renderService.getJobStatus(jobId);
+    const cachedProgress = await this.renderService.getJobProgress(jobId);
 
     // 진행 중인 상태('pending', 'processing' 등)는 DB 조회 없이 캐시에서 바로 반환하여 성능 확보
     if (
@@ -131,6 +133,7 @@ export class RenderController {
       return {
         job_id: jobId,
         status: statusFromCache,
+        ...this.presentProgress(statusFromCache, cachedProgress),
         output_image: null,
         model: null,
         created_at: null,
@@ -146,6 +149,7 @@ export class RenderController {
         return {
           job_id: jobId,
           status: statusFromCache,
+          ...this.presentProgress(statusFromCache, cachedProgress),
           output_image: null,
           model: null,
           created_at: null,
@@ -158,12 +162,55 @@ export class RenderController {
     return {
       job_id: job.id,
       status: statusFromCache || job.status, // 캐시 상태를 DB 상태보다 우선 적용
+      ...this.presentProgress(statusFromCache || job.status, cachedProgress),
       output_image: job.outputImageKey
         ? await this.renderService.presignOutputGet(job.outputImageKey)
         : null,
       model: job.metadata?.model ?? DEFAULT_RENDER_MODEL,
       created_at: job.createdAt,
       updated_at: job.updatedAt,
+    };
+  }
+
+  private presentProgress(
+    status: string,
+    snapshot: RenderProgressSnapshot | null,
+  ) {
+    const fallback = this.fallbackProgress(status);
+    const current = snapshot ?? fallback;
+    return {
+      progress: current.progress,
+      phase: current.phase,
+      progress_message: current.message,
+    };
+  }
+
+  private fallbackProgress(status: string): RenderProgressSnapshot {
+    if (status === 'completed') {
+      return {
+        progress: 100,
+        phase: 'completed',
+        message: '이미지 생성이 완료되었습니다.',
+      };
+    }
+    if (status === 'failed' || status === 'quota_exceeded') {
+      return {
+        progress: -1,
+        phase: 'failed',
+        message: '이미지 생성에 실패했습니다.',
+      };
+    }
+    if (status === 'pending') {
+      return {
+        progress: 5,
+        phase: 'queued',
+        message: '렌더링 작업이 대기열에 등록되었습니다.',
+      };
+    }
+    return {
+      progress: 35,
+      phase: 'generating',
+      message: 'AI가 이미지를 생성하고 있습니다.',
     };
   }
 }

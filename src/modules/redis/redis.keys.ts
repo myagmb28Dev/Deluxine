@@ -11,6 +11,10 @@ export class RedisKeys {
     return `render_job:${jobId}:status`;
   }
 
+  static renderJobProgress(jobId: string): string {
+    return `render_job:${jobId}:progress`;
+  }
+
   static renderUserUsageDay(userId: string, day: string): string {
     return `render:usage:user:${userId}:day:${day}`;
   }
