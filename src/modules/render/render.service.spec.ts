@@ -26,10 +26,12 @@ describe('RenderService', () => {
     ),
     findOne: jest.fn((): Promise<RenderJob | null> => Promise.resolve(null)),
     createQueryBuilder: jest.fn(() => queryBuilder),
+    delete: jest.fn(),
   };
   const redisService = {
     set: jest.fn((): Promise<'OK'> => Promise.resolve('OK')),
     get: jest.fn((): Promise<string | null> => Promise.resolve(null)),
+    del: jest.fn((): Promise<number> => Promise.resolve(1)),
   };
   const r2Service = {
     presignGet: jest.fn(() =>
@@ -40,6 +42,7 @@ describe('RenderService', () => {
         method: 'GET' as const,
       }),
     ),
+    deleteObjects: jest.fn(() => Promise.resolve()),
   };
   const renderQueue = {
     add: jest.fn(() => Promise.resolve({ id: 'job-1' })),
@@ -192,5 +195,40 @@ describe('RenderService', () => {
     const result = await service.listHistory('user-1', { limit: 20 });
 
     expect(result.items[0].session_title).toBe('세션 3905f650');
+  });
+
+  it('deletes an owned history output without deleting its session', async () => {
+    repository.findOne.mockResolvedValue({
+      id: 'job-1',
+      outputImageKey: 'renders/job-1.webp',
+      session: { userId: 'user-1' },
+    });
+    repository.delete.mockResolvedValue({ affected: 1 });
+
+    await expect(service.deleteHistoryItem('user-1', 'job-1')).resolves.toBe(
+      true,
+    );
+
+    expect(repository.findOne).toHaveBeenCalledWith({
+      where: { id: 'job-1', session: { userId: 'user-1' } },
+      relations: { session: true },
+    });
+    expect(r2Service.deleteObjects).toHaveBeenCalledWith([
+      'renders/job-1.webp',
+    ]);
+    expect(repository.delete).toHaveBeenCalledWith({ id: 'job-1' });
+    expect(redisService.del).toHaveBeenCalledWith('render_job:job-1:status');
+    expect(redisService.del).toHaveBeenCalledWith('render_job:job-1:progress');
+  });
+
+  it('does not delete a history output not owned by the user', async () => {
+    repository.findOne.mockResolvedValue(null);
+
+    await expect(service.deleteHistoryItem('user-2', 'job-1')).resolves.toBe(
+      false,
+    );
+
+    expect(r2Service.deleteObjects).not.toHaveBeenCalled();
+    expect(repository.delete).not.toHaveBeenCalled();
   });
 });

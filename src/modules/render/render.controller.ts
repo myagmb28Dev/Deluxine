@@ -1,7 +1,10 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  HttpCode,
+  HttpStatus,
   NotFoundException,
   Param,
   Post,
@@ -39,6 +42,22 @@ export class RenderHistoryController {
     @Req() req: { user: User },
   ) {
     return this.renderService.listHistory(req.user.id, query);
+  }
+
+  @Delete('history/:jobId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Delete one completed render history output' })
+  async deleteHistoryItem(
+    @Param('jobId') jobId: string,
+    @Req() req: { user: User },
+  ) {
+    const deleted = await this.renderService.deleteHistoryItem(
+      req.user.id,
+      jobId,
+    );
+    if (!deleted) {
+      throw new NotFoundException('render history item not found');
+    }
   }
 }
 

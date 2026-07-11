@@ -6,7 +6,11 @@ import { RenderService } from './render.service';
 import { RenderUsageService } from './render-usage.service';
 
 describe('RenderController usage reservation', () => {
-  const renderService = { render: jest.fn(), listHistory: jest.fn() };
+  const renderService = {
+    render: jest.fn(),
+    listHistory: jest.fn(),
+    deleteHistoryItem: jest.fn(),
+  };
   const sessionService = {
     findById: jest.fn(),
     appendHistory: jest.fn(),
@@ -98,5 +102,30 @@ describe('RenderController usage reservation', () => {
       created_at: null,
       updated_at: null,
     });
+  });
+
+  it('deletes an owned render history item', async () => {
+    renderService.deleteHistoryItem.mockResolvedValue(true);
+
+    await expect(
+      historyController.deleteHistoryItem('job-1', {
+        user: { id: 'user-1' } as User,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(renderService.deleteHistoryItem).toHaveBeenCalledWith(
+      'user-1',
+      'job-1',
+    );
+  });
+
+  it('returns not found when deleting another users history item', async () => {
+    renderService.deleteHistoryItem.mockResolvedValue(false);
+
+    await expect(
+      historyController.deleteHistoryItem('job-1', {
+        user: { id: 'user-2' } as User,
+      }),
+    ).rejects.toThrow('render history item not found');
   });
 });

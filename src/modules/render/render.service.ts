@@ -200,6 +200,26 @@ export class RenderService {
     };
   }
 
+  async deleteHistoryItem(userId: string, jobId: string) {
+    const job = await this.renderJobRepository.findOne({
+      where: { id: jobId, session: { userId } },
+      relations: { session: true },
+    });
+    if (!job) {
+      return false;
+    }
+
+    if (job.outputImageKey) {
+      await this.r2Service.deleteObjects([job.outputImageKey]);
+    }
+    await this.renderJobRepository.delete({ id: jobId });
+    await Promise.all([
+      this.redisService.del(RedisKeys.renderJobStatus(jobId)),
+      this.redisService.del(RedisKeys.renderJobProgress(jobId)),
+    ]);
+    return true;
+  }
+
   private encodeHistoryCursor(cursor: RenderHistoryCursor) {
     return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
   }

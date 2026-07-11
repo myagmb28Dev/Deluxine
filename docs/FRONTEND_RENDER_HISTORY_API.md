@@ -84,6 +84,25 @@ An account with no completed outputs receives:
 
 One output whose R2 URL cannot be signed is omitted from that response; other history items remain available.
 
+## Delete One History Image
+
+```http
+DELETE /render/history/:jobId
+Authorization: Bearer <Firebase ID token>
+```
+
+Use the history item's `job_id` as `:jobId`. A successful deletion returns HTTP `204 No Content` with no response body.
+
+Deletion removes:
+
+- The generated output image from R2.
+- The associated render job record.
+- Cached status and progress for that render job.
+
+Deletion preserves the owning session, original line art, pose, and every other render output. The backend verifies ownership from the Firebase user; deleting a missing or another user's item returns HTTP `404`.
+
+After a successful response, remove the matching `job_id` from frontend state. A full history refetch is optional.
+
 ## Suggested Frontend Type
 
 ```ts
