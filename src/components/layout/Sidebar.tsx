@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { LogOut, User, Menu, FolderPlus } from 'lucide-react';
+import { LogOut, User, Menu, FolderPlus, Loader2, Trash2 } from 'lucide-react';
 import type { PipelineStatus } from '../../types';
-import type { SessionListItem } from '../../types/api';
+import type { RenderHistoryItem, SessionListItem } from '../../types/api';
 
 const formatKstLabel = (isoLike: string) => {
   const parsed = new Date(isoLike);
@@ -23,11 +23,21 @@ const formatKstLabel = (isoLike: string) => {
 interface SidebarProps {
   status: PipelineStatus;
   progress: number;
+  progressMessage?: string | null;
   sessionId: string | null;
-  finalImage?: string | null;
   user?: { email?: string | null } | null;
   onLogout: () => void;
   recentSessions?: SessionListItem[];
+  renderHistory?: RenderHistoryItem[];
+  renderHistoryCursor?: string | null;
+  isLoadingRenderHistory?: boolean;
+  isLoadingMoreRenderHistory?: boolean;
+  renderHistoryError?: string | null;
+  deletingRenderJobId?: string | null;
+  onReloadRenderHistory?: () => void;
+  onLoadMoreRenderHistory?: () => void;
+  onRenderHistorySelect?: (item: RenderHistoryItem) => void;
+  onDeleteRenderHistory?: (jobId: string) => void;
   onSessionSelect?: (id: string) => void;
   onNewSession?: () => void;
   onRenameSession?: (id: string, title: string) => void;
@@ -37,11 +47,21 @@ interface SidebarProps {
 export const Sidebar: React.FC<SidebarProps> = ({ 
   status,
   progress,
+  progressMessage,
   sessionId,
-  finalImage,
   user,
   onLogout,
   recentSessions,
+  renderHistory = [],
+  renderHistoryCursor,
+  isLoadingRenderHistory = false,
+  isLoadingMoreRenderHistory = false,
+  renderHistoryError,
+  deletingRenderJobId,
+  onReloadRenderHistory,
+  onLoadMoreRenderHistory,
+  onRenderHistorySelect,
+  onDeleteRenderHistory,
   onSessionSelect,
   onNewSession,
   onRenameSession,
@@ -149,13 +169,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
           {(status === 'analyzing' || status === 'rendering') && (
             <div className="p-3 rounded-2xl bg-white/[0.01] border border-white/5 animate-in fade-in slide-in-from-top-1 duration-300">
               <div className="flex justify-between items-center mb-1.5">
-                <span className="text-[9px] font-bold text-indigo-400 uppercase tracking-wider">AI Processing</span>
-                <span className="text-[10px] font-mono font-black text-white">{progress}%</span>
+                <span className="truncate text-[9px] font-bold text-indigo-400">
+                  {status === 'rendering' ? progressMessage || '렌더링 작업을 준비하고 있습니다.' : 'AI Processing'}
+                </span>
+                <span className="shrink-0 text-[10px] font-mono font-black text-white">{progress}%</span>
               </div>
               <div className="h-1.5 w-full bg-zinc-950 rounded-full overflow-hidden p-[1px] border border-white/5">
                 <div 
-                  className="h-full bg-gradient-to-r from-indigo-500 via-purple-500 to-sky-400 rounded-full transition-all duration-500 ease-out shadow-[0_0_8px_rgba(99,102,241,0.8)]" 
-                  style={{ width: `${progress}%` }}
+                  className="h-full rounded-full bg-gradient-to-r from-indigo-500 via-purple-500 to-sky-400 shadow-[0_0_8px_rgba(99,102,241,0.8)] transition-all duration-500 ease-out"
+                  style={{ width: `${Math.max(0, Math.min(100, progress))}%` }}
                 />
               </div>
             </div>
@@ -230,17 +252,88 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         </section>
 
-        {finalImage && (
-          <section className="pt-4 border-t border-white/5">
-            <label className="text-[9px] font-bold uppercase text-zinc-500 tracking-[0.15em] mb-3 block">Generated Output</label>
-            <div className="rounded-2xl overflow-hidden border border-white/5 bg-zinc-950 shadow-2xl group relative cursor-pointer">
-              <img src={finalImage} alt="Final Result" className="w-full h-auto transition-transform duration-500 group-hover:scale-105" />
-              <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-end p-3">
-                <span className="text-[9px] text-zinc-300 font-mono">View full render</span>
-              </div>
+        <section className="border-t border-white/5 pt-4">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <label className="text-[9px] font-bold uppercase text-zinc-500 tracking-[0.15em]">Render History</label>
+            {!isLoadingRenderHistory && renderHistory.length > 0 && (
+              <span className="text-[9px] font-mono text-zinc-600">{renderHistory.length}</span>
+            )}
+          </div>
+
+          {isLoadingRenderHistory ? (
+            <div className="grid grid-cols-2 gap-2" aria-label="렌더 기록 불러오는 중">
+              {[0, 1, 2, 3].map((item) => (
+                <div key={item} className="aspect-square animate-pulse rounded-lg border border-white/5 bg-white/[0.03]" />
+              ))}
             </div>
-          </section>
-        )}
+          ) : renderHistoryError ? (
+            <div className="rounded-lg border border-red-500/15 bg-red-500/[0.06] p-3 text-[10px] text-red-200">
+              <p>{renderHistoryError}</p>
+              <button type="button" onClick={onReloadRenderHistory} className="mt-2 font-semibold text-red-100 hover:text-white">
+                다시 불러오기
+              </button>
+            </div>
+          ) : renderHistory.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-white/5 p-4 text-center text-[10px] text-zinc-600">
+              완료된 렌더가 없습니다.
+            </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 gap-2">
+                {renderHistory.map((item) => (
+                  <div
+                    key={item.job_id}
+                    className="group/history relative min-w-0 overflow-hidden rounded-lg border border-white/5 bg-zinc-950 transition-all hover:border-indigo-400/35 hover:shadow-[0_0_14px_rgba(99,102,241,0.16)]"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => onRenderHistorySelect?.(item)}
+                      className="block w-full text-left"
+                      title={item.prompt || item.session_title || '렌더 결과'}
+                    >
+                      <div className="aspect-square overflow-hidden bg-black">
+                        <img
+                          src={item.output_image}
+                          alt={`${item.session_title} 렌더 결과`}
+                          loading="lazy"
+                          className="h-full w-full object-cover transition-transform duration-300 group-hover/history:scale-105"
+                        />
+                      </div>
+                      <div className="space-y-0.5 p-2">
+                        <p className="truncate text-[10px] font-medium text-zinc-300">{item.session_title}</p>
+                        <p className="truncate text-[8px] font-mono text-zinc-600">{formatKstLabel(item.created_at)}</p>
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`${item.session_title} 렌더 삭제`}
+                      disabled={deletingRenderJobId === item.job_id}
+                      onClick={() => {
+                        if (window.confirm('이 렌더 결과를 삭제할까요?')) {
+                          onDeleteRenderHistory?.(item.job_id);
+                        }
+                      }}
+                      className="absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-md border border-white/10 bg-black/75 text-zinc-400 opacity-0 backdrop-blur transition-all hover:border-red-400/30 hover:bg-red-500/15 hover:text-red-300 group-hover/history:opacity-100 focus:opacity-100 disabled:opacity-100"
+                    >
+                      {deletingRenderJobId === item.job_id ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              {renderHistoryCursor && (
+                <button
+                  type="button"
+                  onClick={onLoadMoreRenderHistory}
+                  disabled={isLoadingMoreRenderHistory}
+                  className="mt-3 h-9 w-full rounded-lg border border-white/5 bg-white/[0.02] text-[10px] font-semibold text-zinc-400 transition-colors hover:border-white/10 hover:text-white disabled:cursor-wait disabled:opacity-50"
+                >
+                  {isLoadingMoreRenderHistory ? '불러오는 중...' : '더 보기'}
+                </button>
+              )}
+            </>
+          )}
+        </section>
       </div>
 
       {menuState && (

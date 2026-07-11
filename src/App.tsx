@@ -14,6 +14,7 @@ import type {
   PoseTopologyResponse,
   RenderModelId,
   RenderModelListResponse,
+  RenderHistoryItem,
   RenderUsageResponse,
   SessionListItem,
 } from './types/api';
@@ -23,7 +24,7 @@ import {
   normalizeApiMessage,
   selectCatalogModel,
 } from './lib/renderModel';
-import { estimateRenderProgress } from './lib/renderProgress';
+import { mergeRenderHistory, removeRenderHistoryItem } from './lib/renderHistory';
 
 type SessionOverrides = Record<string, { title?: string; hidden?: boolean }>;
 const SESSION_OVERRIDES_KEY = 'deluxine_session_overrides';
@@ -181,7 +182,6 @@ const AppContent: React.FC = () => {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [status, setStatus] = useState<PipelineStatus>('idle');
   const [prompt, setPrompt] = useState('');
-  const [finalImage, setFinalImage] = useState<string | null>(null);
   const [lineArtImage, setLineArtImage] = useState<string | null>(null);
   const [renderErrorMessage, setRenderErrorMessage] = useState<string | null>(null);
   const [renderModels, setRenderModels] = useState<RenderModelListResponse | null>(null);
@@ -194,9 +194,16 @@ const AppContent: React.FC = () => {
   const [initialKps, setInitialKps] = useState<Keypoint[]>([]);
   const [initialEditorState, setInitialEditorState] = useState<PoseEditorState | null>(null);
   const [progress, setProgress] = useState(0);
+  const [renderProgressMessage, setRenderProgressMessage] = useState<string | null>(null);
   const [poseTopology, setPoseTopology] = useState<PoseTopologyResponse | null>(null);
   const [poseGuide, setPoseGuide] = useState<PoseGuideResponse | null>(null);
   const [recentSessions, setRecentSessions] = useState<SessionListItem[]>([]);
+  const [renderHistory, setRenderHistory] = useState<RenderHistoryItem[]>([]);
+  const [renderHistoryCursor, setRenderHistoryCursor] = useState<string | null>(null);
+  const [isLoadingRenderHistory, setIsLoadingRenderHistory] = useState(false);
+  const [isLoadingMoreRenderHistory, setIsLoadingMoreRenderHistory] = useState(false);
+  const [renderHistoryError, setRenderHistoryError] = useState<string | null>(null);
+  const [deletingRenderJobId, setDeletingRenderJobId] = useState<string | null>(null);
   const [sessionOverrides, setSessionOverrides] = useState<SessionOverrides>(() => loadSessionOverrides());
   const eventSourceRef = useRef<EventSource | null>(null);
   const statusPollRef = useRef<number | null>(null);
@@ -293,7 +300,6 @@ const AppContent: React.FC = () => {
     setSessionId(null);
     setStatus('idle');
     setPrompt('');
-    setFinalImage(null);
     setLineArtImage(null);
     setRenderErrorMessage(null);
     setRenderModels(null);
@@ -306,6 +312,7 @@ const AppContent: React.FC = () => {
     setInitialKps([]);
     setInitialEditorState(null);
     setProgress(0);
+    setRenderProgressMessage(null);
     setPoseTopology(null);
     setPoseGuide(null);
     pendingPoseRef.current = null;
@@ -394,6 +401,56 @@ const AppContent: React.FC = () => {
       setIsLoadingModels(false);
     }
   }, []);
+
+  const loadRenderHistory = React.useCallback(async (cursor?: string) => {
+    const append = Boolean(cursor);
+    if (append) {
+      setIsLoadingMoreRenderHistory(true);
+    } else {
+      setIsLoadingRenderHistory(true);
+      setRenderHistoryError(null);
+    }
+
+    try {
+      const response = await renderApi.getHistory({ limit: 20, ...(cursor ? { cursor } : {}) });
+      setRenderHistory((current) => append ? mergeRenderHistory(current, response.items) : response.items);
+      setRenderHistoryCursor(response.next_cursor);
+    } catch (error) {
+      console.error('[App] Failed to load render history:', error);
+      setRenderHistoryError(getErrorMessage(error, '렌더 기록을 불러오지 못했습니다. 다시 시도해 주세요.'));
+      if (!append) {
+        setRenderHistory([]);
+        setRenderHistoryCursor(null);
+      }
+    } finally {
+      setIsLoadingRenderHistory(false);
+      setIsLoadingMoreRenderHistory(false);
+    }
+  }, []);
+
+  const deleteRenderHistoryItem = React.useCallback(async (jobId: string) => {
+    setDeletingRenderJobId(jobId);
+    setRenderHistoryError(null);
+    try {
+      await renderApi.deleteHistoryItem(jobId);
+      setRenderHistory((current) => removeRenderHistoryItem(current, jobId));
+    } catch (error) {
+      console.error('[App] Failed to delete render history item:', error);
+      setRenderHistoryError(getErrorMessage(error, '렌더 결과를 삭제하지 못했습니다. 다시 시도해 주세요.'));
+    } finally {
+      setDeletingRenderJobId(null);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (!isLoggedIn) {
+      setRenderHistory([]);
+      setRenderHistoryCursor(null);
+      setRenderHistoryError(null);
+      return;
+    }
+    void loadRenderHistory();
+  }, [isLoggedIn, loadRenderHistory]);
 
   const loadRenderUsage = React.useCallback(async (sid: string) => {
     setIsLoadingUsage(true);
@@ -486,7 +543,11 @@ const AppContent: React.FC = () => {
           sessionId: sid,
           jobId: jid,
           status: res.status,
+          progress: res.progress,
+          phase: res.phase,
         });
+        setProgress(res.progress);
+        setRenderProgressMessage(res.progress_message);
 
         if (res.status === 'completed') {
           if (!res.output_image) {
@@ -497,19 +558,16 @@ const AppContent: React.FC = () => {
             stopRenderPolling();
             return;
           }
-          setFinalImage(resolveAssetUrl(res.output_image));
-          setProgress(100);
           setStatus('completed');
           stopRenderPolling();
+          void loadRenderHistory();
         } else if (res.status === 'quota_exceeded') {
-          setProgress(-1);
           clearLastRenderJobId(sid);
           console.warn('[App] Render quota exceeded:', res);
           setRenderErrorMessage('무료 이미지 생성 공통 한도에 도달했거나 현재 제공자가 혼잡합니다. 잠시 후 또는 한도 갱신 후 다시 시도해 주세요.');
           setStatus('failed');
           stopRenderPolling();
         } else if (res.status === 'failed') {
-          setProgress(-1);
           clearLastRenderJobId(sid);
           console.warn('[App] Render job failed:', res);
           setRenderErrorMessage(getRenderFailureMessage(res, '렌더링 중 오류가 발생했습니다. 다시 시도해 주세요.'));
@@ -517,11 +575,6 @@ const AppContent: React.FC = () => {
           stopRenderPolling();
         } else {
           setStatus('rendering');
-          setProgress((current) => estimateRenderProgress(
-            res.status === 'running' ? 'running' : 'pending',
-            Date.now() - activeJob.startedAt,
-            current,
-          ));
         }
       } catch (err) {
         console.error('[App] Failed to poll render job status:', err);
@@ -536,7 +589,7 @@ const AppContent: React.FC = () => {
     renderPollRef.current = window.setInterval(() => {
       void pollOnce();
     }, RENDER_POLL_INTERVAL_MS);
-  }, [stopRenderPolling]);
+  }, [loadRenderHistory, stopRenderPolling]);
 
   const restoreSession = React.useCallback(async (targetSessionId: string) => {
     if (!isLoggedIn) return;
@@ -545,7 +598,6 @@ const AppContent: React.FC = () => {
       const session = await sessionApi.getById(targetSessionId);
       setSessionId(session.id);
       setLineArtImage(resolveAssetUrl(session.lineArtUrl));
-      setFinalImage(null);
       setRenderErrorMessage(null);
       setPrompt('');
       setProgress(0);
@@ -607,11 +659,13 @@ const AppContent: React.FC = () => {
             sessionId: session.id,
             jobId: lastRenderJob.jobId,
             status: res.status,
+            progress: res.progress,
+            phase: res.phase,
           });
+          setProgress(res.progress);
+          setRenderProgressMessage(res.progress_message);
           if (res.status === 'completed') {
             if (res.output_image) {
-              setFinalImage(resolveAssetUrl(res.output_image));
-              setProgress(100);
               setStatus('completed');
             } else {
               clearLastRenderJobId(session.id);
@@ -620,20 +674,17 @@ const AppContent: React.FC = () => {
               setStatus('failed');
             }
           } else if (res.status === 'quota_exceeded') {
-            setProgress(-1);
             clearLastRenderJobId(session.id);
             console.warn('[App] Render quota exceeded while restoring job:', res);
             setRenderErrorMessage('무료 이미지 생성 공통 한도에 도달했거나 현재 제공자가 혼잡합니다. 잠시 후 또는 한도 갱신 후 다시 시도해 주세요.');
             setStatus('failed');
           } else if (res.status === 'failed') {
-            setProgress(-1);
             clearLastRenderJobId(session.id);
             console.warn('[App] Render job failed while restoring:', res);
             setRenderErrorMessage(getRenderFailureMessage(res, '렌더링 중 오류가 발생했습니다. 다시 시도해 주세요.'));
             setStatus('failed');
           } else {
             setStatus('rendering');
-            setProgress(0);
             pollRenderStatus(session.id, lastRenderJob.jobId, lastRenderJob.startedAt);
           }
         } catch (err) {
@@ -721,7 +772,6 @@ const AppContent: React.FC = () => {
     try {
       setProgress(0);
       setStatus('analyzing');
-      setFinalImage(null);
       setRenderErrorMessage(null);
       setInitialKps([]);
       setInitialEditorState(null);
@@ -853,7 +903,8 @@ const AppContent: React.FC = () => {
     stopRenderPolling();
     
     // UI 상태를 즉시 'rendering'으로 전환하여 버튼 비활성화 및 로딩 표시
-    setProgress(5);
+    setProgress(0);
+    setRenderProgressMessage('렌더링 작업을 요청하고 있습니다.');
     setStatus('rendering');
     setRenderErrorMessage(null);
     
@@ -912,11 +963,23 @@ const AppContent: React.FC = () => {
       <Sidebar 
         status={status}
         progress={progress}
+        progressMessage={renderProgressMessage}
         sessionId={sessionId}
-        finalImage={finalImage}
         user={user}
         onLogout={logout}
         recentSessions={sessionPanelItems}
+        renderHistory={renderHistory}
+        renderHistoryCursor={renderHistoryCursor}
+        isLoadingRenderHistory={isLoadingRenderHistory}
+        isLoadingMoreRenderHistory={isLoadingMoreRenderHistory}
+        renderHistoryError={renderHistoryError}
+        deletingRenderJobId={deletingRenderJobId}
+        onReloadRenderHistory={() => void loadRenderHistory()}
+        onLoadMoreRenderHistory={() => {
+          if (renderHistoryCursor) void loadRenderHistory(renderHistoryCursor);
+        }}
+        onRenderHistorySelect={(item) => setSearchParams({ sessionId: item.session_id })}
+        onDeleteRenderHistory={(jobId) => void deleteRenderHistoryItem(jobId)}
         onSessionSelect={(id) => setSearchParams({ sessionId: id })}
         onNewSession={() => {
           setSearchParams({});

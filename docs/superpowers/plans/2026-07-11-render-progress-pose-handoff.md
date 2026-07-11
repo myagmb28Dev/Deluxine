@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Show useful render progress without a backend percentage and prevent pose-uncontrolled render requests.
+**Goal:** Prevent pose-uncontrolled render requests while showing only backend-provided progress.
 
-**Architecture:** Keep elapsed-time progress calculation in a pure utility and use it only for non-terminal render states. Treat the editor pose projection as required input, log capture metadata without logging image contents, and document the remaining backend reference-priority issue.
+**Architecture:** Pose-analysis progress may use the backend percentage. Render generation has no backend percentage, so it uses an indeterminate animation with no estimated number. Treat the editor pose projection as required input, log capture metadata without logging image contents, and document the remaining backend reference-priority issue.
 
 **Tech Stack:** React, TypeScript, Bun test, Vite
 
@@ -16,21 +16,15 @@
 
 ---
 
-### Task 1: Render Progress Estimator
+### Task 1: Render Progress Presentation
 
 **Files:**
-- Create: `src/lib/renderProgress.ts`
-- Create: `src/lib/renderProgress.test.ts`
 - Modify: `src/App.tsx`
+- Modify: `src/components/layout/Sidebar.tsx`
 
-**Interfaces:**
-- Produces: `estimateRenderProgress(status, elapsedMs, currentProgress): number`
-
-- [x] Write tests proving pending/running progress is monotonic, bounded below 100, and terminal completion remains handled by the app.
-- [x] Run `bun test src/lib/renderProgress.test.ts` and verify the tests fail before implementation.
-- [x] Implement the estimator with a pending range of 8-20 and a running range of 20-90.
-- [x] Replace render polling's unconditional `setProgress(0)` with the estimator.
-- [x] Run `bun test src/lib/renderProgress.test.ts` and verify it passes.
+- [x] Remove elapsed-time render progress estimation.
+- [x] Keep render progress at zero until the backend reports completion.
+- [x] Display an indeterminate animation and `처리 중` instead of a percentage during rendering.
 
 ### Task 2: Required Pose Projection
 
@@ -51,4 +45,4 @@
 
 - [x] Document reproduction, confirmed frontend payload path, observed model behavior, and requested backend changes.
 - [x] Run `bun test`, `bun run build`, and `git diff --check`.
-- [x] Verify progress calculation with automated tests; avoid consuming a user render quota for a visual-only check.
+- [x] Verify the app build and render presentation without consuming another user render quota.

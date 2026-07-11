@@ -145,13 +145,39 @@ export type CreateRenderResponse = {
 
 export type RenderJobStatus = 'pending' | 'running' | 'completed' | 'failed' | 'quota_exceeded';
 
+export type RenderProgressPhase =
+  | 'queued'
+  | 'preparing'
+  | 'generating'
+  | 'uploading'
+  | 'completed'
+  | 'failed';
+
 export type RenderJobResponse = {
   job_id: string;
   status: RenderJobStatus;
+  progress: number;
+  phase: RenderProgressPhase;
+  progress_message: string;
   output_image: string | null;
   model: RenderModelId | null;
   created_at: string | null;
   updated_at: string | null;
+};
+
+export type RenderHistoryItem = {
+  job_id: string;
+  session_id: string;
+  session_title: string;
+  output_image: string;
+  model: string;
+  prompt: string;
+  created_at: string;
+};
+
+export type RenderHistoryResponse = {
+  items: RenderHistoryItem[];
+  next_cursor: string | null;
 };
 
 export type MeResponse = {

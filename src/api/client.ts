@@ -9,6 +9,7 @@ import type {
   PoseTopologyResponse,
   PoseStatusResponse,
   RenderJobResponse,
+  RenderHistoryResponse,
   RenderModelListResponse,
   RenderUsageResponse,
   SessionDto,
@@ -117,6 +118,10 @@ export const poseApi = {
 };
 
 export const renderApi = {
+  getHistory: (query: { limit?: number; cursor?: string } = { limit: 20 }) =>
+    api.get<RenderHistoryResponse>('/render/history', { params: query }).then(res => res.data),
+  deleteHistoryItem: (jobId: string) =>
+    api.delete<void>(`/render/history/${jobId}`).then(() => undefined),
   getModels: (sessionId: string) =>
     api.get<RenderModelListResponse>(`/sessions/${sessionId}/render/models`).then(res => res.data),
   getUsage: (sessionId: string) =>
