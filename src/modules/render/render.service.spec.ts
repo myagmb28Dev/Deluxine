@@ -175,4 +175,22 @@ describe('RenderService', () => {
       },
     );
   });
+
+  it('uses the session identifier as the title when the session has no title', async () => {
+    queryBuilder.getMany.mockResolvedValue([
+      {
+        id: 'job-1',
+        sessionId: '3905f650-2537-47c8-bcd4-ed5283344036',
+        session: { title: null },
+        prompt: '',
+        outputImageKey: 'renders/job-1.webp',
+        metadata: {},
+        createdAt: new Date('2026-07-11T09:00:00.000Z'),
+      },
+    ]);
+
+    const result = await service.listHistory('user-1', { limit: 20 });
+
+    expect(result.items[0].session_title).toBe('세션 3905f650');
+  });
 });

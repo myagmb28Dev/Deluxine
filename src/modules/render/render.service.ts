@@ -170,7 +170,8 @@ export class RenderService {
           return {
             job_id: job.id,
             session_id: job.sessionId,
-            session_title: job.session?.title ?? null,
+            session_title:
+              job.session?.title?.trim() || `세션 ${job.sessionId.slice(0, 8)}`,
             output_image: output.url,
             model:
               (job.metadata?.model as string | undefined) ??

@@ -40,6 +40,8 @@ Only jobs satisfying all of the following are returned:
 
 Items are ordered by `createdAt DESC, id DESC`. The cursor contains both fields so pagination remains deterministic. Output URLs are freshly presigned when the response is built. Failed, pending, running, and quota-exceeded jobs are excluded.
 
+`session_title` is always non-null. The persisted session title is preferred; sessions without one use `세션 <first 8 characters of session_id>` so every output visibly identifies its owning session.
+
 ## Backend Boundaries
 
 - `RenderController` exposes the user-scoped endpoint.

@@ -44,7 +44,7 @@ Invalid limits or cursors return HTTP `400`.
 Field behavior:
 
 - `items` is ordered newest first.
-- `session_title` is `null` when the session has no title.
+- `session_title` always identifies the owning session. A saved title is returned as-is; otherwise the backend returns `세션 <session_id first 8 characters>`.
 - `output_image` is a freshly signed R2 URL and should not be persisted as a permanent URL.
 - `model` falls back to the backend default model for legacy jobs without model metadata.
 - `next_cursor` is `null` when there are no more results.
@@ -90,7 +90,7 @@ One output whose R2 URL cannot be signed is omitted from that response; other hi
 export type RenderHistoryItem = {
   job_id: string;
   session_id: string;
-  session_title: string | null;
+  session_title: string;
   output_image: string;
   model: string;
   prompt: string;
