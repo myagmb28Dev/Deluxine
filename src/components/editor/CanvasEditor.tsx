@@ -930,8 +930,9 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
       const key = event.key.toLowerCase();
       let handled = true;
 
+      const resetKey = event.code === 'Digit1' || event.code === 'Numpad1' ? '1' : key;
       const resetScope = event.shiftKey
-        ? ({ w: 'position', e: 'rotation', r: 'scale', '1': 'bones', c: 'all' } as const)[key as 'w' | 'e' | 'r' | '1' | 'c']
+        ? ({ w: 'position', e: 'rotation', r: 'scale', '1': 'bones', c: 'all' } as const)[resetKey as 'w' | 'e' | 'r' | '1' | 'c']
         : undefined;
 
       if (resetScope) {
@@ -1059,14 +1060,14 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
         </button>
       </div>
 
-      {activeModeLabel && (
+      {backgroundImage && activeModeLabel && (
         <div className="absolute left-4 top-4 z-20 flex items-center gap-2 text-[11px] font-medium text-indigo-200">
           <span>{activeModeLabel}</span>
           <span className="h-1.5 w-1.5 rounded-full bg-violet-400 animate-pulse" />
         </div>
       )}
 
-      <Canvas
+      {backgroundImage && <Canvas
         orthographic
         className="relative z-10"
         camera={{ position: [0, 0, 10], zoom: 100 }}
@@ -1137,7 +1138,7 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
             RIGHT: THREE.MOUSE.ROTATE,
           }}
         />
-      </Canvas>
+      </Canvas>}
 
       {showGuide && (
         <div
@@ -1238,18 +1239,18 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
         </div>
       )}
 
-      {rigState.message && (
+      {backgroundImage && rigState.message && (
         <div className="absolute inset-x-4 bottom-14 z-20 rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-2.5 text-xs text-amber-200 backdrop-blur-md shadow-lg">
           {rigState.message}
         </div>
       )}
 
-      <div className="absolute bottom-4 left-4 pointer-events-none">
+      {backgroundImage && <div className="absolute bottom-4 left-4 pointer-events-none">
         <div className="text-[9px] text-zinc-500 font-mono uppercase tracking-[0.2em] flex items-center gap-1.5">
           <span className="h-1 w-1 rounded-full bg-indigo-500/80 animate-ping" />
           {statusText}
         </div>
-      </div>
+      </div>}
     </div>
   );
 });
