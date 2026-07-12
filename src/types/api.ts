@@ -126,10 +126,16 @@ export type RenderUsageResponse = {
   tracked_at: string;
 };
 
+export type RenderCameraView = {
+  azimuthDegrees: number;
+  elevationDegrees: number;
+};
+
 export type CreateRenderRequest = {
   model?: RenderModelId;
   prompt: string;
   poseProjectionImage?: string;
+  cameraView?: RenderCameraView;
 };
 
 export type CreateRenderResponse = {

@@ -4,7 +4,13 @@ import { OrbitControls, Sphere, TransformControls, useGLTF } from '@react-three/
 import * as THREE from 'three';
 import { clone } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import type { Keypoint } from '../../types';
-import type { PoseEditorState, PoseGuideResponse, PoseTopologyResponse } from '../../types/api';
+import type {
+  PoseEditorState,
+  PoseGuideResponse,
+  PoseTopologyResponse,
+  RenderCameraView,
+} from '../../types/api';
+import { calculateRenderCameraView } from '../../lib/renderCameraView';
 
 const MODEL_URL = '/models/bane_male_texture_rigged_merged.glb';
 const BACKGROUND_OPACITY = 0.42;
@@ -60,8 +66,13 @@ type TransformMode = 'translate' | 'rotate' | 'scale';
 type TransformTarget = 'whole' | 'bone';
 type EditorModeShortcut = 'w' | 'e' | 'r' | '1';
 
+export type PoseProjectionCapture = {
+  imageData: string;
+  cameraView: RenderCameraView | null;
+};
+
 export type CanvasEditorHandle = {
-  capturePoseProjection: () => Promise<string | null>;
+  capturePoseProjection: () => Promise<PoseProjectionCapture | null>;
 };
 
 type RigState = {
@@ -294,11 +305,13 @@ const BoneHandle = ({
 const CaptureBridge = ({
   captureRequestId,
   enabled,
+  controlsRef,
   onCaptured,
 }: {
   captureRequestId: number;
   enabled: boolean;
-  onCaptured: (imageData: string | null) => void;
+  controlsRef: React.MutableRefObject<OrbitControlRef>;
+  onCaptured: (capture: PoseProjectionCapture | null) => void;
 }) => {
   const { gl, scene, camera } = useThree();
 
@@ -334,10 +347,12 @@ const CaptureBridge = ({
           context?.drawImage(sourceCanvas, 0, 0, exportCanvas.width, exportCanvas.height);
 
           const imageData = exportCanvas.toDataURL('image/jpeg', POSE_PROJECTION_QUALITY);
+          const target = controlsRef.current?.target ?? new THREE.Vector3(0, 0, 0);
+          const cameraView = calculateRenderCameraView(camera, target);
 
           scene.background = previousBackground;
           gl.setClearColor(previousClearColor, previousClearAlpha);
-          onCaptured(imageData);
+          onCaptured({ imageData, cameraView });
         });
       });
     };
@@ -349,7 +364,7 @@ const CaptureBridge = ({
       scene.background = previousBackground;
       gl.setClearColor(previousClearColor, previousClearAlpha);
     };
-  }, [camera, captureRequestId, enabled, gl, onCaptured, scene]);
+  }, [camera, captureRequestId, controlsRef, enabled, gl, onCaptured, scene]);
 
   return null;
 };
@@ -776,7 +791,7 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
     firstBoneId: null,
     message: null,
   });
-  const captureResolverRef = useRef<((imageData: string | null) => void) | null>(null);
+  const captureResolverRef = useRef<((capture: PoseProjectionCapture | null) => void) | null>(null);
   const captureTimeoutRef = useRef<number | null>(null);
   const activeTarget: TransformTarget = rigState.canEditBones ? transformTarget : 'whole';
   const orbitControlsRef = useRef<OrbitControlRef>(null);
@@ -785,7 +800,7 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
   const handleCameraZoomChange = useCallback((zoom: number) => {
     setCameraZoom((current) => (Math.abs(current - zoom) < 0.01 ? current : zoom));
   }, []);
-  const handleCaptureComplete = useCallback((imageData: string | null) => {
+  const handleCaptureComplete = useCallback((capture: PoseProjectionCapture | null) => {
     if (captureTimeoutRef.current) {
       window.clearTimeout(captureTimeoutRef.current);
       captureTimeoutRef.current = null;
@@ -793,7 +808,7 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
     setCaptureMode(false);
     const resolve = captureResolverRef.current;
     captureResolverRef.current = null;
-    resolve?.(imageData);
+    resolve?.(capture);
   }, []);
 
   useImperativeHandle(ref, () => ({
@@ -1028,6 +1043,7 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
           <CaptureBridge
             captureRequestId={captureRequestId}
             enabled={captureMode}
+            controlsRef={orbitControlsRef}
             onCaptured={handleCaptureComplete}
           />
           <CameraPersistence

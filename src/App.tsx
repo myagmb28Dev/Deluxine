@@ -913,13 +913,14 @@ const AppContent: React.FC = () => {
       console.log('[App] Saving final pose before rendering...');
       await poseApi.update(sessionId, toApiKeypoints(keypoints), latestEditorStateRef.current ?? undefined);
 
-      const poseProjectionImage = await canvasEditorRef.current?.capturePoseProjection();
-      if (!poseProjectionImage) {
+      const poseProjectionCapture = await canvasEditorRef.current?.capturePoseProjection();
+      if (!poseProjectionCapture?.imageData) {
         throw new Error('현재 마네킹 포즈 이미지를 캡처하지 못했습니다. 잠시 후 다시 시도해 주세요.');
       }
       console.info('[App] Pose projection captured:', {
-        mimeType: poseProjectionImage.match(/^data:([^;,]+)/)?.[1] ?? 'unknown',
-        characters: poseProjectionImage.length,
+        mimeType: poseProjectionCapture.imageData.match(/^data:([^;,]+)/)?.[1] ?? 'unknown',
+        characters: poseProjectionCapture.imageData.length,
+        cameraView: poseProjectionCapture.cameraView,
       });
       
       // Step 2: 렌더링(이미지 생성) 요청
@@ -927,7 +928,10 @@ const AppContent: React.FC = () => {
       const job = await renderApi.request(sessionId, {
         model: selectedModel,
         prompt: prompt || '',
-        poseProjectionImage: poseProjectionImage || undefined,
+        poseProjectionImage: poseProjectionCapture.imageData,
+        ...(poseProjectionCapture.cameraView
+          ? { cameraView: poseProjectionCapture.cameraView }
+          : {}),
       });
       console.info('[App] Render job created:', {
         sessionId,
