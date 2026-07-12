@@ -76,7 +76,7 @@ describe('RenderService', () => {
       lineArtKey: 'users/user-1/line-art.png',
       chosenPose: { keypoints: [] },
       prompt: 'Keep the original style.',
-      model: RenderModel.SEEDREAM_4_5,
+      model: RenderModel.GEMINI_3_1_FLASH_LITE_IMAGE,
       poseProjectionImage: 'data:image/png;base64,pose',
       usageDay: '2026-07-10',
       history: [],
@@ -85,7 +85,7 @@ describe('RenderService', () => {
     expect(repository.create).toHaveBeenCalledWith(
       expect.objectContaining({
         metadata: expect.objectContaining({
-          model: RenderModel.SEEDREAM_4_5,
+          model: RenderModel.GEMINI_3_1_FLASH_LITE_IMAGE,
           usage_day: '2026-07-10',
         }) as unknown,
       }),
@@ -93,12 +93,12 @@ describe('RenderService', () => {
     expect(renderQueue.add).toHaveBeenCalledWith(
       'process-render',
       expect.objectContaining({
-        model: RenderModel.SEEDREAM_4_5,
+        model: RenderModel.GEMINI_3_1_FLASH_LITE_IMAGE,
         usageDay: '2026-07-10',
       }),
       expect.any(Object),
     );
-    expect(result.model).toBe(RenderModel.SEEDREAM_4_5);
+    expect(result.model).toBe(RenderModel.GEMINI_3_1_FLASH_LITE_IMAGE);
   });
 
   it('removes the pending job and cache when queue insertion fails', async () => {
@@ -111,7 +111,7 @@ describe('RenderService', () => {
         lineArtKey: 'users/user-1/line-art.png',
         chosenPose: { keypoints: [] },
         prompt: '',
-        model: RenderModel.SEEDREAM_4_5,
+        model: RenderModel.GEMINI_3_1_FLASH_LITE_IMAGE,
         usageDay: '2026-07-11',
         history: [],
       }),
@@ -145,7 +145,7 @@ describe('RenderService', () => {
         session: { title: 'Gesture study' },
         prompt: 'Keep the line art.',
         outputImageKey: 'renders/job-2.webp',
-        metadata: { model: RenderModel.SEEDREAM_4_5 },
+        metadata: { model: RenderModel.GEMINI_3_1_FLASH_LITE_IMAGE },
         createdAt: new Date('2026-07-11T09:00:00.000Z'),
       },
     ]);
@@ -178,7 +178,7 @@ describe('RenderService', () => {
           session_id: 'session-1',
           session_title: 'Gesture study',
           output_image: 'https://cdn.example.com/output.png',
-          model: RenderModel.SEEDREAM_4_5,
+          model: RenderModel.GEMINI_3_1_FLASH_LITE_IMAGE,
           prompt: 'Keep the line art.',
           created_at: '2026-07-11T09:00:00.000Z',
         },

@@ -1,10 +1,10 @@
 export enum RenderModel {
-  SEEDREAM_4_5 = 'bytedance-seed/seedream-4.5',
-  FLUX_2_PRO = 'black-forest-labs/flux.2-pro',
-  RIVERFLOW_2_5_PRO = 'sourceful/riverflow-v2.5-pro',
+  GEMINI_3_1_FLASH_LITE_IMAGE = 'google/gemini-3.1-flash-lite-image',
+  GEMINI_3_1_FLASH_IMAGE = 'google/gemini-3.1-flash-image',
+  GEMINI_3_PRO_IMAGE = 'google/gemini-3-pro-image',
 }
 
-export const DEFAULT_RENDER_MODEL = RenderModel.FLUX_2_PRO;
+export const DEFAULT_RENDER_MODEL = RenderModel.GEMINI_3_1_FLASH_IMAGE;
 
 export const RENDER_USER_USAGE_POLICY = {
   requests_per_day: 2,
@@ -14,24 +14,24 @@ export const RENDER_USER_USAGE_POLICY = {
 
 export const RENDER_MODEL_OPTIONS = [
   {
-    id: RenderModel.SEEDREAM_4_5,
-    name: 'Seedream 4.5',
+    id: RenderModel.GEMINI_3_1_FLASH_LITE_IMAGE,
+    name: 'Nano Banana 2 Lite',
     tier: 'value',
     pricing: 'payg',
-    description: '저렴하고 일관성 좋은 이미지 편집 모델',
+    description: '빠르고 비용 효율적인 이미지 생성 모델',
   },
   {
-    id: RenderModel.FLUX_2_PRO,
-    name: 'FLUX.2 Pro',
+    id: RenderModel.GEMINI_3_1_FLASH_IMAGE,
+    name: 'Nano Banana 2',
     tier: 'balanced',
     pricing: 'payg',
     description: '품질과 속도의 균형이 좋은 기본 모델',
   },
   {
-    id: RenderModel.RIVERFLOW_2_5_PRO,
-    name: 'Riverflow V2.5 Pro',
+    id: RenderModel.GEMINI_3_PRO_IMAGE,
+    name: 'Nano Banana Pro',
     tier: 'premium',
     pricing: 'payg',
-    description: '복잡한 편집에 적합한 고품질 모델',
+    description: '복잡한 편집에 적합한 최고 품질 모델',
   },
 ] as const;

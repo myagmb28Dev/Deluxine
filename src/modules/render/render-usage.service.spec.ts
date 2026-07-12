@@ -38,6 +38,7 @@ describe('RenderUsageService', () => {
   });
 
   it('rejects and rolls back a request above the user daily limit', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-07-11T03:04:05.000Z'));
     redisService.incr.mockResolvedValue(3);
     redisService.eval.mockResolvedValue(1);
 

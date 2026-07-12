@@ -22,7 +22,7 @@ describe('OpenRouterImageService', () => {
   );
 
   const request = {
-    model: RenderModel.FLUX_2_PRO,
+    model: RenderModel.GEMINI_3_1_FLASH_IMAGE,
     lineArtImage: 'https://cdn.example.com/line-art.png',
     poseData: { keypoints: [{ name: 'left_shoulder', x: 0.2, y: 0.3 }] },
     poseProjectionImage: 'data:image/png;base64,pose-base64',
@@ -48,16 +48,16 @@ describe('OpenRouterImageService', () => {
     expect(post).toHaveBeenCalledWith(
       'https://openrouter.ai/api/v1/images',
       expect.objectContaining({
-        model: RenderModel.FLUX_2_PRO,
+        model: RenderModel.GEMINI_3_1_FLASH_IMAGE,
         n: 1,
         input_references: [
           {
             type: 'image_url',
-            image_url: { url: 'https://cdn.example.com/line-art.png' },
+            image_url: { url: 'data:image/png;base64,pose-base64' },
           },
           {
             type: 'image_url',
-            image_url: { url: 'data:image/png;base64,pose-base64' },
+            image_url: { url: 'https://cdn.example.com/line-art.png' },
           },
         ],
       }),
@@ -77,7 +77,11 @@ describe('OpenRouterImageService', () => {
     );
   });
 
-  it('prioritizes the pose reference for Seedream and discards the source pose', async () => {
+  it.each([
+    RenderModel.GEMINI_3_1_FLASH_LITE_IMAGE,
+    RenderModel.GEMINI_3_1_FLASH_IMAGE,
+    RenderModel.GEMINI_3_PRO_IMAGE,
+  ])('prioritizes the pose reference for %s', async (model) => {
     post.mockReturnValue(
       of({
         data: {
@@ -87,15 +91,12 @@ describe('OpenRouterImageService', () => {
       }),
     );
 
-    const result = await service.render({
-      ...request,
-      model: RenderModel.SEEDREAM_4_5,
-    });
-
+    const result = await service.render({ ...request, model });
     const payload = post.mock.calls[0][1] as {
       prompt: string;
       input_references: Array<{ image_url: { url: string } }>;
     };
+
     expect(
       payload.input_references.map((reference) => reference.image_url.url),
     ).toEqual([

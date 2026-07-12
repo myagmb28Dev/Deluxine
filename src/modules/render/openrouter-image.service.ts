@@ -242,8 +242,7 @@ export class OpenRouterImageService {
     request: OpenRouterRenderRequest,
   ): OpenRouterRenderResult['referenceStrategy'] {
     if (!request.poseProjectionImage) return 'line_art_only';
-    if (request.model === RenderModel.SEEDREAM_4_5) return 'pose_first';
-    return 'line_art_first';
+    return 'pose_first';
   }
 
   private imageMimeType(image?: string) {

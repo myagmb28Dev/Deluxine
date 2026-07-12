@@ -85,9 +85,9 @@ Authorization: Bearer {access_token}
 
 The final image renderer uses OpenRouter image models and supports these model IDs:
 
-- `bytedance-seed/seedream-4.5` (value)
-- `black-forest-labs/flux.2-pro` (default, balanced)
-- `sourceful/riverflow-v2.5-pro` (premium)
+- `google/gemini-3.1-flash-lite-image` (value)
+- `google/gemini-3.1-flash-image` (default, balanced)
+- `google/gemini-3-pro-image` (premium)
 
 These are paid OpenRouter model IDs. Usage is deducted from the OpenRouter
 account balance according to each model's current price.
@@ -115,10 +115,10 @@ Pass the selected model when creating a render job:
 
 ```json
 {
-  "model": "black-forest-labs/flux.2-pro",
+  "model": "google/gemini-3.1-flash-image",
   "prompt": "Keep the original character design and background.",
   "poseProjectionImage": "data:image/png;base64,..."
 }
 ```
 
-If `model` is omitted, the backend uses `black-forest-labs/flux.2-pro`.
+If `model` is omitted, the backend uses `google/gemini-3.1-flash-image`.

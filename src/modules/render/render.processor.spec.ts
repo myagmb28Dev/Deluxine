@@ -187,7 +187,7 @@ describe('RenderProcessor usage refunds', () => {
         lineArtKey: 'line-art.png',
         chosenPose: { keypoints: [] },
         prompt: '',
-        model: RenderModel.SEEDREAM_4_5,
+        model: RenderModel.GEMINI_3_1_FLASH_IMAGE,
         poseProjectionImage: 'data:image/jpeg;base64,pose',
         usageDay: '2026-07-10',
       },
