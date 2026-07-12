@@ -88,12 +88,12 @@ export type UpdateSessionRequest = {
 };
 
 export type RenderModelId =
-  | 'black-forest-labs/flux.2-pro:free'
-  | 'bytedance-seed/seedream-4.5:free'
-  | 'sourceful/riverflow-v2.5-pro:free';
+  | 'google/gemini-3.1-flash-lite-image'
+  | 'google/gemini-3.1-flash-image'
+  | 'google/gemini-3-pro-image';
 
 export type RenderModelTier = 'balanced' | 'value' | 'premium';
-export type RenderModelPricing = 'free';
+export type RenderModelPricing = 'payg';
 
 export type RenderModelOption = {
   id: RenderModelId;

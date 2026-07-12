@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { RenderModelListResponse } from '../types/api';
+import type { RenderModelId, RenderModelListResponse } from '../types/api';
 import {
   getRenderUsageRatio,
   isRenderUsageExhausted,
@@ -8,21 +8,28 @@ import {
 } from './renderModel';
 
 const catalog: RenderModelListResponse = {
-  default_model: 'black-forest-labs/flux.2-pro:free',
+  default_model: 'google/gemini-3.1-flash-image',
   models: [
     {
-      id: 'black-forest-labs/flux.2-pro:free',
-      name: 'FLUX.2 Pro',
-      tier: 'balanced',
-      pricing: 'free',
-      description: 'Balanced quality and speed.',
+      id: 'google/gemini-3.1-flash-lite-image',
+      name: 'Nano Banana 2 Lite',
+      tier: 'value',
+      pricing: 'payg',
+      description: '빠르고 비용 효율적인 이미지 생성 모델',
     },
     {
-      id: 'bytedance-seed/seedream-4.5:free',
-      name: 'Seedream 4.5',
-      tier: 'value',
-      pricing: 'free',
-      description: 'Strong spatial consistency.',
+      id: 'google/gemini-3.1-flash-image',
+      name: 'Nano Banana 2',
+      tier: 'balanced',
+      pricing: 'payg',
+      description: '품질과 속도의 균형이 좋은 기본 모델',
+    },
+    {
+      id: 'google/gemini-3-pro-image',
+      name: 'Nano Banana Pro',
+      tier: 'premium',
+      pricing: 'payg',
+      description: '복잡한 편집에 적합한 최고 품질 모델',
     },
   ],
   usage_policy: {
@@ -33,23 +40,25 @@ const catalog: RenderModelListResponse = {
 };
 
 describe('selectCatalogModel', () => {
-  test('selects the backend default when there is no current selection', () => {
-    expect(selectCatalogModel(catalog, null)).toBe(catalog.default_model);
-  });
-
-  test('preserves a current selection that still exists in the catalog', () => {
-    expect(selectCatalogModel(catalog, 'bytedance-seed/seedream-4.5:free')).toBe(
-      'bytedance-seed/seedream-4.5:free',
+  test('selects Nano Banana 2 when there is no current selection', () => {
+    expect(selectCatalogModel(catalog, null)).toBe(
+      'google/gemini-3.1-flash-image',
     );
   });
 
-  test('replaces an unsupported current selection with the backend default', () => {
+  test('preserves a current Nano Banana selection that exists in the catalog', () => {
+    expect(
+      selectCatalogModel(catalog, 'google/gemini-3-pro-image'),
+    ).toBe('google/gemini-3-pro-image');
+  });
+
+  test('replaces a persisted legacy selection with the backend default', () => {
     expect(
       selectCatalogModel(
         catalog,
-        'sourceful/riverflow-v2.5-pro:free',
+        'bytedance-seed/seedream-4.5:free' as RenderModelId,
       ),
-    ).toBe(catalog.default_model);
+    ).toBe('google/gemini-3.1-flash-image');
   });
 
   test('returns null when the backend catalog is empty', () => {
