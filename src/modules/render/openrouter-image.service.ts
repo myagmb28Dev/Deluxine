@@ -4,13 +4,14 @@ import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
 import { isAxiosError } from 'axios';
 import { RenderModel } from './render-model';
-import { RenderPoseData } from './render-job.types';
+import { RenderCameraView, RenderPoseData } from './render-job.types';
 
 export interface OpenRouterRenderRequest {
   model: RenderModel;
   lineArtImage: string;
   poseData: RenderPoseData;
   poseProjectionImage?: string;
+  cameraView?: RenderCameraView;
   prompt: string;
 }
 
@@ -204,6 +205,17 @@ export class OpenRouterImageService {
         'Do not preserve the source arm directions, leg directions, torso angle, or body orientation.',
         'Do not copy the mannequin appearance. Transfer only the pose.',
       ].join(' ');
+
+      if (request.cameraView) {
+        poseInstruction = [
+          poseInstruction,
+          'Preserve the target camera viewpoint from the pose projection image.',
+          `Horizontal camera azimuth: ${request.cameraView.azimuthDegrees} degrees.`,
+          `Vertical camera elevation: ${request.cameraView.elevationDegrees} degrees.`,
+          'Do not normalize or rotate the character to a front-facing view.',
+          'Ignore the camera viewpoint of the source line art; use it only for character design.',
+        ].join(' ');
+      }
     } else {
       const keypoints = request.poseData.keypoints ?? [];
       const ignoredKeypoints = new Set([

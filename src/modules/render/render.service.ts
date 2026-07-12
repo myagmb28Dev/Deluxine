@@ -48,6 +48,7 @@ export class RenderService {
         model: input.model,
         usage_day: input.usageDay,
         has_pose_projection_image: Boolean(input.poseProjectionImage),
+        ...(input.cameraView ? { camera_view: input.cameraView } : {}),
         history: input.history,
       },
     });
@@ -73,6 +74,7 @@ export class RenderService {
           prompt: input.prompt,
           model: input.model,
           poseProjectionImage: input.poseProjectionImage,
+          cameraView: input.cameraView,
           usageDay: input.usageDay,
         },
         {

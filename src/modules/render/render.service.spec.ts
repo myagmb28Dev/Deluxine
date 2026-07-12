@@ -78,6 +78,7 @@ describe('RenderService', () => {
       prompt: 'Keep the original style.',
       model: RenderModel.GEMINI_3_1_FLASH_LITE_IMAGE,
       poseProjectionImage: 'data:image/png;base64,pose',
+      cameraView: { azimuthDegrees: 38, elevationDegrees: 12 },
       usageDay: '2026-07-10',
       history: [],
     });
@@ -87,6 +88,7 @@ describe('RenderService', () => {
         metadata: expect.objectContaining({
           model: RenderModel.GEMINI_3_1_FLASH_LITE_IMAGE,
           usage_day: '2026-07-10',
+          camera_view: { azimuthDegrees: 38, elevationDegrees: 12 },
         }) as unknown,
       }),
     );
@@ -95,6 +97,7 @@ describe('RenderService', () => {
       expect.objectContaining({
         model: RenderModel.GEMINI_3_1_FLASH_LITE_IMAGE,
         usageDay: '2026-07-10',
+        cameraView: { azimuthDegrees: 38, elevationDegrees: 12 },
       }),
       expect.any(Object),
     );

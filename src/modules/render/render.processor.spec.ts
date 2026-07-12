@@ -135,6 +135,11 @@ describe('RenderProcessor usage refunds', () => {
         reference_count: 2,
       }),
     );
+    expect(openRouterImageService.render).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cameraView: { azimuthDegrees: 38, elevationDegrees: 12 },
+      }),
+    );
     expect(
       renderUsageService.releaseUserRequestForFailedJob,
     ).not.toHaveBeenCalled();
@@ -189,6 +194,7 @@ describe('RenderProcessor usage refunds', () => {
         prompt: '',
         model: RenderModel.GEMINI_3_1_FLASH_IMAGE,
         poseProjectionImage: 'data:image/jpeg;base64,pose',
+        cameraView: { azimuthDegrees: 38, elevationDegrees: 12 },
         usageDay: '2026-07-10',
       },
     } as unknown as Job<RenderQueuePayload, TestRenderResult, string>;

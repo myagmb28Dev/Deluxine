@@ -26,6 +26,7 @@ describe('OpenRouterImageService', () => {
     lineArtImage: 'https://cdn.example.com/line-art.png',
     poseData: { keypoints: [{ name: 'left_shoulder', x: 0.2, y: 0.3 }] },
     poseProjectionImage: 'data:image/png;base64,pose-base64',
+    cameraView: { azimuthDegrees: 38, elevationDegrees: 12 },
     prompt: 'Keep the background white.',
   };
 
@@ -107,11 +108,38 @@ describe('OpenRouterImageService', () => {
     expect(payload.prompt).toContain(
       'Do not preserve the source arm directions, leg directions, torso angle, or body orientation.',
     );
+    expect(payload.prompt).toContain(
+      'Preserve the target camera viewpoint from the pose projection image.',
+    );
+    expect(payload.prompt).toContain(
+      'Horizontal camera azimuth: 38 degrees.',
+    );
+    expect(payload.prompt).toContain(
+      'Vertical camera elevation: 12 degrees.',
+    );
+    expect(payload.prompt).toContain(
+      'Do not normalize or rotate the character to a front-facing view.',
+    );
     expect(result).toEqual(
       expect.objectContaining({
         referenceStrategy: 'pose_first',
         referenceCount: 2,
       }),
+    );
+  });
+
+  it('does not add camera angle instructions without cameraView', async () => {
+    post.mockReturnValue(
+      of({ data: { data: [{ b64_json: 'generated-image' }] } }),
+    );
+
+    await service.render({ ...request, cameraView: undefined });
+
+    const payload = post.mock.calls[0][1] as { prompt: string };
+    expect(payload.prompt).not.toContain('Horizontal camera azimuth:');
+    expect(payload.prompt).not.toContain('Vertical camera elevation:');
+    expect(payload.prompt).not.toContain(
+      'Do not normalize or rotate the character to a front-facing view.',
     );
   });
 

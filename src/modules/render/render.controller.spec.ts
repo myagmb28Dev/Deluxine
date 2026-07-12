@@ -66,6 +66,25 @@ describe('RenderController usage reservation', () => {
     );
   });
 
+  it('passes the camera viewpoint to the render service', async () => {
+    renderService.render.mockResolvedValue({ job_id: 'job-1' });
+
+    await controller.create(
+      'session-1',
+      {
+        prompt: '',
+        cameraView: { azimuthDegrees: 38, elevationDegrees: 12 },
+      },
+      { user: { id: 'user-1' } as User },
+    );
+
+    expect(renderService.render).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cameraView: { azimuthDegrees: 38, elevationDegrees: 12 },
+      }),
+    );
+  });
+
   it('lists render history for the authenticated user', async () => {
     renderService.listHistory.mockResolvedValue({
       items: [],

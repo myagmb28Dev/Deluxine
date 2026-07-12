@@ -50,6 +50,7 @@ export class RenderProcessor extends WorkerHost {
       prompt,
       model = DEFAULT_RENDER_MODEL,
       poseProjectionImage,
+      cameraView,
       usageDay,
     } = job.data;
     this.logger.log(`Processing render job ${jobId} with ${model}`);
@@ -81,6 +82,7 @@ export class RenderProcessor extends WorkerHost {
         poseData: chosenPose,
         prompt,
         poseProjectionImage,
+        cameraView,
       });
       await this.updateProgress(jobId, RENDER_PROGRESS.uploading);
 

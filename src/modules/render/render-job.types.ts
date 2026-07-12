@@ -17,6 +17,11 @@ export interface RenderProgressSnapshot {
 
 export type RenderPoseData = Pick<Pose, 'keypoints'> & Partial<Pose>;
 
+export interface RenderCameraView {
+  azimuthDegrees: number;
+  elevationDegrees: number;
+}
+
 export interface RenderQueuePayload {
   jobId: string;
   sessionId: string;
@@ -26,6 +31,7 @@ export interface RenderQueuePayload {
   prompt: string;
   model?: RenderModel;
   poseProjectionImage?: string;
+  cameraView?: RenderCameraView;
   usageDay?: string;
 }
 

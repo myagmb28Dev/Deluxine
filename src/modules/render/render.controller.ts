@@ -126,6 +126,7 @@ export class RenderController {
         prompt: dto.prompt,
         model: dto.model ?? DEFAULT_RENDER_MODEL,
         poseProjectionImage: dto.poseProjectionImage,
+        cameraView: dto.cameraView,
         usageDay: reservation.usageDay,
         history: latest?.history ?? session.history,
       });

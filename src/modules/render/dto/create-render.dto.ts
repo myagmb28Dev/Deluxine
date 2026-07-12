@@ -1,6 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEnum, IsOptional, IsString } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsEnum, IsOptional, IsString, ValidateNested } from 'class-validator';
 import { DEFAULT_RENDER_MODEL, RenderModel } from '../render-model';
+import { RenderCameraViewDto } from './render-camera-view.dto';
 
 export class CreateRenderDto {
   @ApiPropertyOptional({
@@ -24,4 +26,13 @@ export class CreateRenderDto {
   @IsOptional()
   @IsString()
   poseProjectionImage?: string;
+
+  @ApiPropertyOptional({
+    type: RenderCameraViewDto,
+    description: 'Camera viewpoint used to capture the pose projection.',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => RenderCameraViewDto)
+  cameraView?: RenderCameraViewDto;
 }
