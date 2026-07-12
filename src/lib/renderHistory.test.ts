@@ -7,7 +7,7 @@ const item = (jobId: string): RenderHistoryItem => ({
   session_id: `session-${jobId}`,
   session_title: `세션 ${jobId}`,
   output_image: `https://example.com/${jobId}.webp`,
-  model: 'bytedance-seed/seedream-4.5',
+  model: 'google/gemini-3.1-flash-image',
   prompt: '',
   created_at: '2026-07-11T09:00:00.000Z',
 });

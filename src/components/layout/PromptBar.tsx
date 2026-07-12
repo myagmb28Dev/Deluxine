@@ -42,12 +42,6 @@ const tierLabels: Record<RenderModelOption['tier'], string> = {
   premium: '고품질',
 };
 
-const modelDescriptions: Record<string, string> = {
-  'Seedream 4.5': '저렴하고 일관성 좋은 이미지 편집 모델',
-  'FLUX.2 Pro': '품질과 속도의 균형이 좋은 기본 모델',
-  'Riverflow V2.5 Pro': '복잡한 편집에 적합한 고품질 모델',
-};
-
 const modelValueOrder: Record<RenderModelOption['tier'], number> = {
   value: 0,
   balanced: 1,
@@ -217,7 +211,9 @@ export const PromptBar: React.FC<PromptBarProps> = ({
                             {tierLabels[model.tier]}
                           </span>
                         </div>
-                        <p className="mt-1 text-[11px] leading-4 text-zinc-400">{modelDescriptions[model.name]}</p>
+                        <p className="mt-1 text-[11px] leading-4 text-zinc-400">
+                          {model.description}
+                        </p>
                       </div>
                       {model.id === selectedModel && <Check size={16} className="mt-0.5 shrink-0 text-white" />}
                     </button>
