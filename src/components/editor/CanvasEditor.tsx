@@ -65,6 +65,8 @@ const saveCameraState = (sessionId: string, state: StoredCameraState) => {
 type TransformMode = 'translate' | 'rotate' | 'scale';
 type TransformTarget = 'whole' | 'bone';
 type EditorModeShortcut = 'w' | 'e' | 'r' | '1';
+type ResetScope = 'position' | 'rotation' | 'scale' | 'bones' | 'all';
+type ResetRequest = { id: number; scope: ResetScope };
 
 export type PoseProjectionCapture = {
   imageData: string;
@@ -378,13 +380,14 @@ const CameraPersistence = ({
   enabled: boolean;
   controlsRef: React.MutableRefObject<OrbitControlRef>;
 }) => {
-  const { camera } = useThree();
+  const getThreeState = useThree((state) => state.get);
 
   useEffect(() => {
     if (!enabled || !sessionId) return;
     const saved = loadCameraState(sessionId);
     if (!saved) return;
 
+    const camera = getThreeState().camera;
     camera.position.fromArray(saved.position);
     camera.quaternion.fromArray(saved.quaternion);
     (camera as THREE.OrthographicCamera).zoom = saved.zoom;
@@ -394,11 +397,12 @@ const CameraPersistence = ({
       controlsRef.current.target.fromArray(saved.target);
       controlsRef.current.update();
     }
-  }, [camera, controlsRef, enabled, sessionId]);
+  }, [controlsRef, enabled, getThreeState, sessionId]);
 
   const handleSave = useCallback(() => {
     if (!enabled || !sessionId) return;
 
+    const camera = getThreeState().camera;
     const controls = controlsRef.current;
     const target = controls?.target ?? new THREE.Vector3(0, 0, 0);
     const zoom = (camera as THREE.OrthographicCamera).zoom ?? 1;
@@ -409,7 +413,7 @@ const CameraPersistence = ({
       zoom,
       target: [target.x, target.y, target.z],
     });
-  }, [camera, controlsRef, enabled, sessionId]);
+  }, [controlsRef, enabled, getThreeState, sessionId]);
 
   return <OrbitControlsSaveBridge onSave={handleSave} />;
 };
@@ -420,10 +424,13 @@ const OrbitControlsSaveBridge = ({ onSave }: { onSave: () => void }) => {
   useEffect(() => {
     if (!controls) return;
     const onEnd = () => onSave();
-    const orbit = controls as any;
-    orbit.addEventListener?.('end', onEnd);
+    const orbit = controls as unknown as {
+      addEventListener: (type: 'end', listener: () => void) => void;
+      removeEventListener: (type: 'end', listener: () => void) => void;
+    };
+    orbit.addEventListener('end', onEnd);
     return () => {
-      orbit.removeEventListener?.('end', onEnd);
+      orbit.removeEventListener('end', onEnd);
     };
   }, [controls, onSave]);
 
@@ -464,6 +471,7 @@ const RiggedMannequin = ({
   keypoints,
   guide,
   initialEditorState,
+  resetRequest,
   captureMode,
   transformMode,
   transformTarget,
@@ -479,6 +487,7 @@ const RiggedMannequin = ({
   keypoints: Keypoint[];
   guide?: PoseGuideResponse | null;
   initialEditorState?: PoseEditorState | null;
+  resetRequest: ResetRequest;
   captureMode: boolean;
   transformMode: TransformMode;
   transformTarget: TransformTarget;
@@ -496,6 +505,7 @@ const RiggedMannequin = ({
   const [pivotObject, setPivotObject] = useState<THREE.Object3D | null>(null);
   const [hoveredBoneId, setHoveredBoneId] = useState<string | null>(null);
   const appliedEditorStateSignatureRef = useRef<string | null>(null);
+  const appliedResetRequestRef = useRef(resetRequest.id);
 
   const guideColors = useMemo(() => buildGuideColorMap(guide), [guide]);
 
@@ -565,6 +575,10 @@ const RiggedMannequin = ({
   }, [scene]);
 
   const boneOptions = useMemo(() => mapEditableBones(modelMeta.bones), [modelMeta.bones]);
+  const defaultBoneQuaternions = useMemo(
+    () => new Map(boneOptions.map((option) => [option.id, option.bone.quaternion.clone()])),
+    [boneOptions],
+  );
 
   const rigState = useMemo<RigState>(() => {
     if (!modelMeta.hasSkinnedMesh || modelMeta.bones.length === 0) {
@@ -688,6 +702,40 @@ const RiggedMannequin = ({
     appliedEditorStateSignatureRef.current = initialEditorStateSignature;
   }, [boneOptions, initialEditorState, initialEditorStateSignature, pivotObject, scene]);
 
+  useEffect(() => {
+    if (!pivotObject || appliedResetRequestRef.current === resetRequest.id) {
+      return;
+    }
+
+    appliedResetRequestRef.current = resetRequest.id;
+
+    if (resetRequest.scope === 'position' || resetRequest.scope === 'all') {
+      pivotObject.position.set(0, 0, 0);
+    }
+    if (resetRequest.scope === 'rotation' || resetRequest.scope === 'all') {
+      pivotObject.quaternion.identity();
+    }
+    if (resetRequest.scope === 'scale' || resetRequest.scope === 'all') {
+      pivotObject.scale.set(1, 1, 1);
+    }
+    if (resetRequest.scope === 'bones' || resetRequest.scope === 'all') {
+      boneOptions.forEach((option) => {
+        const defaultQuaternion = defaultBoneQuaternions.get(option.id);
+        if (defaultQuaternion) {
+          option.bone.quaternion.copy(defaultQuaternion);
+        }
+      });
+    }
+
+    scene.updateMatrixWorld(true);
+
+    const editorState = captureEditorState();
+    if (editorState) {
+      onEditorStateChange?.(editorState, true);
+    }
+    syncKeypointsFromBones(true);
+  }, [boneOptions, captureEditorState, defaultBoneQuaternions, onEditorStateChange, pivotObject, resetRequest, scene, syncKeypointsFromBones]);
+
   return (
     <>
       <ambientLight intensity={1.45} />
@@ -784,6 +832,7 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
   const [captureMode, setCaptureMode] = useState(false);
   const [captureRequestId, setCaptureRequestId] = useState(0);
   const [cameraZoom, setCameraZoom] = useState(DEFAULT_CAMERA_ZOOM);
+  const [resetRequest, setResetRequest] = useState<ResetRequest>({ id: 0, scope: 'position' });
   const [rigState, setRigState] = useState<RigState>({
     isRigged: false,
     canEditBones: false,
@@ -870,12 +919,6 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
   }, [activeModeShortcut, enterWholeMode, transformActive]);
 
   useEffect(() => {
-    if (transformActive && rigState.canEditBones && transformTarget === 'bone' && !selectedBoneId) {
-      setSelectedBoneId(rigState.firstBoneId ?? null);
-    }
-  }, [rigState.canEditBones, rigState.firstBoneId, selectedBoneId, transformActive, transformTarget]);
-
-  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Control') {
         setIsControlPressed(true);
@@ -886,6 +929,28 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
 
       const key = event.key.toLowerCase();
       let handled = true;
+
+      const resetScope = event.shiftKey
+        ? ({ w: 'position', e: 'rotation', r: 'scale', '1': 'bones', c: 'all' } as const)[key as 'w' | 'e' | 'r' | '1' | 'c']
+        : undefined;
+
+      if (resetScope) {
+        if (!event.repeat) {
+          const confirmationMessage: Record<ResetScope, string> = {
+            position: '마네킹 위치를 중앙으로 초기화할까요?',
+            rotation: '마네킹 방향을 기본 회전값으로 초기화할까요?',
+            scale: '마네킹 크기를 기본값으로 초기화할까요?',
+            bones: '모든 관절을 기본값으로 초기화할까요?',
+            all: '마네킹의 위치, 방향, 크기와 모든 관절을 기본 정자세로 초기화할까요?',
+          };
+          const confirmed = window.confirm(confirmationMessage[resetScope]);
+          if (confirmed) {
+            setResetRequest((current) => ({ id: current.id + 1, scope: resetScope }));
+          }
+        }
+        event.preventDefault();
+        return;
+      }
 
       switch (key) {
         case 'w':
@@ -1020,6 +1085,7 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
             keypoints={keypoints}
             guide={guide}
             initialEditorState={initialEditorState}
+            resetRequest={resetRequest}
             captureMode={captureMode}
             transformMode={transformMode}
             transformTarget={activeTarget}
@@ -1103,11 +1169,16 @@ export const CanvasEditor = React.forwardRef<CanvasEditorHandle, CanvasEditorPro
             <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain pt-4 pr-2 text-[11px] leading-4 text-zinc-400">
               <section>
                 <h3 className="mb-2 text-xs font-semibold text-indigo-300">단축키</h3>
-                <div className="grid grid-cols-[48px_1fr_48px_1fr] gap-x-3 gap-y-1.5">
+                <div className="grid grid-cols-[64px_1fr_48px_1fr] gap-x-3 gap-y-1.5">
                   <kbd className="text-center text-zinc-100">W</kbd><span>마네킹 이동</span>
                   <kbd className="text-center text-zinc-100">E</kbd><span>마네킹 회전</span>
                   <kbd className="text-center text-zinc-100">R</kbd><span>마네킹 크기 조절</span>
                   <kbd className="text-center text-zinc-100">1</kbd><span>본 회전 모드</span>
+                  <kbd className="text-center text-zinc-100">Shift+W</kbd><span>마네킹 위치 초기화</span>
+                  <kbd className="text-center text-zinc-100">Shift+E</kbd><span>마네킹 방향 초기화</span>
+                  <kbd className="text-center text-zinc-100">Shift+R</kbd><span>마네킹 크기 초기화</span>
+                  <kbd className="text-center text-zinc-100">Shift+1</kbd><span>모든 관절 초기화</span>
+                  <kbd className="text-center text-zinc-100">Shift+C</kbd><span>기본 정자세로 초기화</span>
                   <kbd className="text-center text-zinc-100">Esc</kbd><span>선택 해제 / 닫기</span>
                   <kbd className="text-center text-zinc-100">H</kbd><span>가이드 열기 / 닫기</span>
                 </div>

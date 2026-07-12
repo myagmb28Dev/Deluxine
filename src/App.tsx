@@ -591,6 +591,66 @@ const AppContent: React.FC = () => {
     }, RENDER_POLL_INTERVAL_MS);
   }, [loadRenderHistory, stopRenderPolling]);
 
+  const subscribeToSessionEvents = React.useCallback((sid: string) => {
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+
+    console.log(`[SSE] Subscribing: ${sid}`);
+    const eventSource = new EventSource(`/sessions/${sid}/events`);
+    eventSourceRef.current = eventSource;
+
+    eventSource.onmessage = async (event) => {
+      try {
+        const data = JSON.parse(event.data);
+
+        if (data.status === 'pending' || data.status === 'generating') {
+          setProgress(data.progress || 0);
+          setStatus('analyzing');
+        }
+
+        if (data.status === 'completed') {
+          if (!data.pose_id) {
+            console.warn('[SSE] Completed event received without pose_id');
+            return;
+          }
+
+          // 중복 전송 방지를 위해 즉시 닫기
+          eventSource.close();
+          eventSourceRef.current = null;
+          console.log('[SSE] Completed. Fetching final pose...');
+
+          const pose = await poseApi.getById(data.pose_id);
+          const legacyPose = pose as typeof pose & { points?: Keypoint[] };
+          applyLoadedPose({
+            keypoints: pose.keypoints || legacyPose.points || [],
+            editorState: pose.editorState ?? null,
+          });
+          stopStatusPolling();
+        }
+
+        if (data.status === 'failed') {
+          eventSource.close();
+          eventSourceRef.current = null;
+          console.warn('[SSE] Pose analysis failed:', data);
+          setRenderErrorMessage(getRenderFailureMessage(data, '포즈 분석에 실패했습니다. 이미지를 확인한 뒤 다시 시도해 주세요.'));
+          setStatus('failed');
+          stopStatusPolling();
+        }
+      } catch (err) {
+        console.error('[SSE] Message error:', err);
+      }
+    };
+
+    eventSource.onerror = () => {
+      eventSource.close();
+      eventSourceRef.current = null;
+      startStatusPolling(sid);
+    };
+    return () => eventSource.close();
+  }, [applyLoadedPose, startStatusPolling, stopStatusPolling]);
+
   const restoreSession = React.useCallback(async (targetSessionId: string) => {
     if (!isLoggedIn) return;
 
@@ -698,7 +758,7 @@ const AppContent: React.FC = () => {
       console.warn('Failed to restore session:', sessionError);
       resetWorkspace();
     }
-  }, [applyLoadedPose, isLoggedIn, pollRenderStatus, resetWorkspace, startStatusPolling]);
+  }, [applyLoadedPose, isLoggedIn, pollRenderStatus, resetWorkspace, startStatusPolling, subscribeToSessionEvents]);
 
   // Load session list when logged in
   React.useEffect(() => {
@@ -813,66 +873,6 @@ const AppContent: React.FC = () => {
       setRenderErrorMessage(getErrorMessage(error, '이미지 업로드에 실패했습니다. 다시 시도해 주세요.'));
       setStatus('idle');
     }
-  };
-
-  const subscribeToSessionEvents = (sid: string) => {
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close();
-      eventSourceRef.current = null;
-    }
-
-    console.log(`[SSE] Subscribing: ${sid}`);
-    const eventSource = new EventSource(`/sessions/${sid}/events`);
-    eventSourceRef.current = eventSource;
-
-    eventSource.onmessage = async (event) => {
-      try {
-        const data = JSON.parse(event.data);
-
-        if (data.status === 'pending' || data.status === 'generating') {
-          setProgress(data.progress || 0);
-          setStatus('analyzing');
-        }
-
-        if (data.status === 'completed') {
-          if (!data.pose_id) {
-            console.warn('[SSE] Completed event received without pose_id');
-            return;
-          }
-
-          // 중복 전송 방지를 위해 즉시 닫기
-          eventSource.close();
-          eventSourceRef.current = null;
-          console.log('[SSE] Completed. Fetching final pose...');
-
-          const pose = await poseApi.getById(data.pose_id);
-          const legacyPose = pose as typeof pose & { points?: Keypoint[] };
-          applyLoadedPose({
-            keypoints: pose.keypoints || legacyPose.points || [],
-            editorState: pose.editorState ?? null,
-          });
-          stopStatusPolling();
-        }
-
-        if (data.status === 'failed') {
-          eventSource.close();
-          eventSourceRef.current = null;
-          console.warn('[SSE] Pose analysis failed:', data);
-          setRenderErrorMessage(getRenderFailureMessage(data, '포즈 분석에 실패했습니다. 이미지를 확인한 뒤 다시 시도해 주세요.'));
-          setStatus('failed');
-          stopStatusPolling();
-        }
-      } catch (err) {
-        console.error('[SSE] Message error:', err);
-      }
-    };
-
-    eventSource.onerror = () => {
-      eventSource.close();
-      eventSourceRef.current = null;
-      startStatusPolling(sid);
-    };
-    return () => eventSource.close();
   };
 
   React.useEffect(() => {

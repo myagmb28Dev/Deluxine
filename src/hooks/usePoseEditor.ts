@@ -3,13 +3,14 @@ import type { Keypoint } from '../types';
 import * as THREE from 'three';
 
 export const usePoseEditor = (initialKeypoints: Keypoint[], onUpdate: (kps: Keypoint[]) => void) => {
-  const [keypoints, setKeypoints] = useState<Keypoint[]>(initialKeypoints);
+  const [keypointState, setKeypointState] = useState(() => ({
+    source: initialKeypoints,
+    value: initialKeypoints,
+  }));
   const saveTimeoutRef = useRef<number | null>(null);
-
-  // 외부 데이터(initialKeypoints)가 들어오면 내부 상태를 즉시 동기화
-  useEffect(() => {
-    setKeypoints(initialKeypoints || []);
-  }, [initialKeypoints]);
+  const keypoints = keypointState.source === initialKeypoints
+    ? keypointState.value
+    : initialKeypoints;
 
   useEffect(() => {
     return () => {
@@ -23,9 +24,12 @@ export const usePoseEditor = (initialKeypoints: Keypoint[], onUpdate: (kps: Keyp
   // 3D 공간에서 전달된 변경된 위치(Vector3)를 정규화 좌표(0~1)로 복원하여 저장
   // isFinal이 true일 때만 서버 업데이트(onUpdate)를 트리거하여 네트워크 부하 최적화
   const handleUpdateKeypoint3D = useCallback((index: number, newPos: THREE.Vector3, isFinal: boolean) => {
-    setKeypoints(prev => {
-      const next = [...prev];
-      if (!next[index]) return prev;
+    setKeypointState(previous => {
+      const current = previous.source === initialKeypoints
+        ? previous.value
+        : initialKeypoints;
+      const next = [...current];
+      if (!next[index]) return previous;
 
       // CanvasEditor에서의 변환 로직을 역산
       // worldX = (x - 0.5) * 6  =>  x = (worldX / 6) + 0.5
@@ -50,9 +54,9 @@ export const usePoseEditor = (initialKeypoints: Keypoint[], onUpdate: (kps: Keyp
         }, 0);
       }
       
-      return next;
+      return { source: initialKeypoints, value: next };
     });
-  }, [onUpdate]);
+  }, [initialKeypoints, onUpdate]);
 
   return { keypoints, handleUpdateKeypoint3D };
 };
